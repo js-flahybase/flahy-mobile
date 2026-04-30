@@ -93,31 +93,39 @@ export const SettingsScreen = () => {
     const fetchProfile = async () => {
         setIsLoading(true);
         try {
-            const data = await userService.getProfile();
-            console.log("🚀 ~ fetchProfile ~ data:", data)
-            // Assuming data.user matches the structure, or adjust as needed
-            const userData = data.user || data; 
-            if (userData) {
-                 setUser(userData); // Update store
-                 setFirstName(userData.first_name || "");
-                 setLastName(userData.last_name || "");
-                 setEmail(userData.email || "");
-                 setPhone(userData.contact || "");
-                 if (userData.date_of_birth) {
-                     // Ensure we parse "YYYY-MM-DD" strictly in local time to avoid timezone offset shifts
-                     const dateStr = userData.date_of_birth.split('T')[0];
-                     if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-                         const [y, m, d] = dateStr.split('-');
-                         const localDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
-                         setDobDate(localDate);
-                         setDob(formatDate(localDate));
-                     } else {
-                         const d = new Date(userData.date_of_birth);
-                         setDobDate(d);
-                         setDob(formatDate(d));
-                     }
-                 }
-                 setGender(userData.gender || "");
+            const response = await userService.getProfile();
+            console.log("🚀 ~ fetchProfile ~ response:", response)
+            const userData =
+                response?.data?.user ||
+                response?.user ||
+                response?.data ||
+                response;
+
+            if (userData && typeof userData === 'object' && userData.id) {
+                const current = useAuthStore.getState().user;
+                setUser({ ...(current || {}), ...userData });
+                setFirstName(userData.first_name || "");
+                setLastName(userData.last_name || "");
+                setEmail(userData.email || "");
+                setPhone(userData.contact || "");
+                if (userData.date_of_birth) {
+                    // Ensure we parse "YYYY-MM-DD" strictly in local time to avoid timezone offset shifts
+                    const dateStr = userData.date_of_birth.split('T')[0];
+                    if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                        const [y, m, d] = dateStr.split('-');
+                        const localDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+                        setDobDate(localDate);
+                        setDob(formatDate(localDate));
+                    } else {
+                        const d = new Date(userData.date_of_birth);
+                        setDobDate(d);
+                        setDob(formatDate(d));
+                    }
+                }
+                setGender(userData.gender || "");
+            } else {
+                console.warn("fetchProfile: unexpected profile response shape", response);
+                showAlert("Error", "Failed to load profile data", 'error');
             }
         } catch (error) {
             console.error("Failed to fetch profile", error);
