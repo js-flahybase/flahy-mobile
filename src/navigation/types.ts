@@ -2,6 +2,7 @@
 export type RootStackParamList = {
   Login: { initialMode?: 'welcome' | 'login' | 'signup' } | undefined;
   Dashboard: undefined;
+  ConsentRequired: undefined;
   Settings: undefined;
   Upload: undefined;
   Camera: undefined;

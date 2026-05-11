@@ -31,6 +31,16 @@ target 'flahy' do
       # :ccache_enabled => true
     )
 
+    # Ensure Release archives include dSYMs (incl. Hermes) for symbol upload/crash reports.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |bc|
+        if bc.name == 'Release'
+          bc.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+          bc.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'YES'
+        end
+      end
+    end
+
     # Xcode 26.4+ Apple Clang: fmt 11.0.2 consteval format checks fail to compile.
     # Compile only the fmt pod as C++17 so FMT_USE_CONSTEVAL path is avoided (RN keeps C++20 elsewhere).
     installer.pods_project.targets.each do |target|

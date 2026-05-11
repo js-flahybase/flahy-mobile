@@ -6,6 +6,11 @@ export const userService = {
     return response.data;
   },
 
+  acceptConsent: async (data?: { email?: string; contact?: string }) => {
+    const response = await api.post('/api/user/accept-consent', data || {});
+    return response.data;
+  },
+
   getFiles: async () => {
     const response = await api.get('/api/user/my-all-upload-files');
     return response.data;

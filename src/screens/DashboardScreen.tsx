@@ -38,6 +38,16 @@ import { userService } from '../services/userService';
 import { useAuthStore } from '../store/authStore';
 import { colors } from '../theme/colors';
 
+const isConsentMissingError = (err: any) => {
+  const status = err?.response?.status;
+  const errors = err?.response?.data?.errors;
+  return (
+    status === 412 &&
+    Array.isArray(errors) &&
+    errors.some((e: any) => e?.consentMissing === true)
+  );
+};
+
 const USER_AVATAR =
   'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2.25&w=256&h=256&q=80';
 
@@ -134,6 +144,10 @@ export const DashboardScreen = () => {
         );
       }
     } catch (error) {
+      if (isConsentMissingError(error)) {
+        navigation.navigate('ConsentRequired');
+        return;
+      }
       console.error('Failed to fetch profile', error);
     }
   };
@@ -532,7 +546,7 @@ export const DashboardScreen = () => {
             >
               <FileText size={20} color="white" />
               <Text className="text-white font-semibold text-base ml-2">
-                Download Your Flahy Report
+                View Your Flahy Report
               </Text>
             </TouchableOpacity>
           )}

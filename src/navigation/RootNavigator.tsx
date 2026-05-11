@@ -7,7 +7,7 @@ import { FlahyAIScreen } from '../screens/FlahyAIScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { ReportsScreen } from '../screens/ReportsScreen';
 import { SchedulePickupScreen } from '../screens/SchedulePickupScreen';
-import { SettingsScreen } from '../screens/SettingsScreen';
+import * as SettingsScreens from '../screens/SettingsScreen';
 import { SupplementScreen } from '../screens/SupplementScreen';
 import { UploadScreen } from '../screens/UploadScreen';
 import { useAuthStore } from '../store/authStore';
@@ -45,6 +45,11 @@ export const RootNavigator = () => {
             <>
               <Stack.Screen name="Dashboard" component={DashboardScreen} />
               <Stack.Screen
+                name="ConsentRequired"
+                component={SettingsScreens.ConsentRequiredScreen}
+                options={{ presentation: 'modal' }}
+              />
+              <Stack.Screen
                 name="Supplements"
                 component={SupplementScreen}
                 options={{ animation: 'slide_from_right' }}
@@ -58,9 +63,14 @@ export const RootNavigator = () => {
                 component={DashboardScreen}
                 options={{ animation: 'slide_from_right' }}
               />
+              <Stack.Screen
+                name="ConsentRequired"
+                component={SettingsScreens.ConsentRequiredScreen}
+                options={{ presentation: 'modal' }}
+              />
             </>
           )}
-          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreens.SettingsScreen} />
           <Stack.Screen
             name="Upload"
             component={UploadScreen}

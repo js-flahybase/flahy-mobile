@@ -25,6 +25,7 @@ import { RootStackParamList } from '../navigation/types';
 import { authService } from '../services/authService';
 import { useAuthStore } from '../store/authStore';
 import { colors } from '../theme/colors';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 
 const BG_IMAGE = require('../assets/login_bg.jpg');
 
@@ -81,6 +82,7 @@ export const LoginScreen = () => {
 
   const setToken = useAuthStore(state => state.setToken);
   const setUser = useAuthStore(state => state.setUser);
+  const setLastKnownEmail = useAuthStore(state => state.setLastKnownEmail);
   const otpInputRef = useRef<TextInput>(null);
 
   // Auto-focus OTP input when entering OTP step (without using autoFocus prop)
@@ -143,7 +145,7 @@ export const LoginScreen = () => {
       } catch (error: any) {
         showAlert(
           'Error',
-          error.response?.data?.message || 'Failed to send OTP',
+          getApiErrorMessage(error, 'Failed to send OTP'),
           'error',
         );
       } finally {
@@ -184,13 +186,14 @@ export const LoginScreen = () => {
         if (response.token) {
           setUser(response.user);
           setToken(response.token);
+          setLastKnownEmail(email.trim().toLowerCase());
         } else {
           showAlert('Error', 'Invalid response', 'error');
         }
       } catch (error: any) {
         showAlert(
           'Error',
-          error.response?.data?.message || 'Invalid OTP',
+          getApiErrorMessage(error, 'Invalid OTP'),
           'error',
         );
       } finally {
@@ -346,7 +349,7 @@ export const LoginScreen = () => {
     } catch (error: any) {
       showAlert(
         'Error',
-        error.response?.data?.message || 'Failed to resend OTP',
+        getApiErrorMessage(error, 'Failed to resend OTP'),
         'error',
       );
     } finally {
@@ -448,7 +451,7 @@ export const LoginScreen = () => {
                 {mode === 'login' && loginStep === 'input' && (
                   <>
                     <Text className="text-2xl font-medium text-center text-text-primary">
-                      Welcome Back
+                      Welcome
                     </Text>
                     <Text className="mt-2 text-base text-text-secondary">
                       Log in to your account
