@@ -450,22 +450,22 @@ export const DashboardScreen = () => {
           {/* User Greeting and Avatar Row */}
           {/* User Greeting and Avatar Row */}
           <View className="flex-row justify-between items-center">
-            <View className="flex-row items-center flex-1 mr-4">
+            <View className="flex-row flex-1 items-center mr-4">
               <Image
                 source={require('../assets/flahy_icon.png')}
-                className="w-10 h-10 mr-3"
+                className="mr-3 w-10 h-10"
                 resizeMode="contain"
               />
               <View>
-                <Text className="text-text-primary font-bold text-lg">
+                <Text className="text-lg font-bold text-text-primary">
                   Hi {user?.first_name || 'User'}
                 </Text>
-                {/* <Text className="text-text-primary font-bold text-xl font-modern">Welcome to Dashboard</Text> */}
+                {/* <Text className="text-xl font-bold text-text-primary font-modern">Welcome to Dashboard</Text> */}
               </View>
             </View>
             <TouchableOpacity
               onPress={() => navigation.navigate('Settings')}
-              className="w-12 h-12 bg-teal/10 rounded-full items-center justify-center border border-teal/20"
+              className="justify-center items-center w-12 h-12 rounded-full border bg-teal/10 border-teal/20"
             >
               <User size={24} color={colors.teal} />
             </TouchableOpacity>
@@ -529,10 +529,10 @@ export const DashboardScreen = () => {
           {user?.can_schedule_appointment !== false && (
             <TouchableOpacity
               onPress={() => navigation.navigate('SchedulePickup')}
-              className="bg-teal w-full h-14 rounded-xl flex-row items-center justify-center mb-4 shadow-sm active:opacity-90"
+              className="flex-row justify-center items-center mb-4 w-full h-14 rounded-xl shadow-sm bg-teal active:opacity-90"
             >
               <Calendar size={20} color="white" />
-              <Text className="text-white font-semibold text-base ml-2">
+              <Text className="ml-2 text-base font-semibold text-white">
                 Schedule Pick-up
               </Text>
             </TouchableOpacity>
@@ -542,27 +542,27 @@ export const DashboardScreen = () => {
           {hasReport && (
             <TouchableOpacity
               onPress={handleDownloadReport}
-              className="bg-teal w-full h-14 rounded-xl flex-row items-center justify-center mb-4 shadow-sm active:opacity-90"
+              className="flex-row justify-center items-center mb-4 w-full h-14 rounded-xl shadow-sm bg-teal active:opacity-90"
             >
               <FileText size={20} color="white" />
-              <Text className="text-white font-semibold text-base ml-2">
+              <Text className="ml-2 text-base font-semibold text-white">
                 View Your Flahy Report
               </Text>
             </TouchableOpacity>
           )}
 
           {/* Products Button — only show when user has a report */}
-          {hasReport && (
+          {/* {hasReport && (
             <TouchableOpacity
               onPress={() => navigation.navigate('Supplements')}
-              className="bg-teal w-full h-14 rounded-xl flex-row items-center justify-center mb-6 shadow-sm active:opacity-90"
+              className="flex-row justify-center items-center mb-6 w-full h-14 rounded-xl shadow-sm bg-teal active:opacity-90"
             >
               <Package size={20} color="white" />
-              <Text className="text-white font-semibold text-base ml-2">
+              <Text className="ml-2 text-base font-semibold text-white">
                 Products
               </Text>
             </TouchableOpacity>
-          )}
+          )} */}
 
           {/* Action Grid */}
           <View
