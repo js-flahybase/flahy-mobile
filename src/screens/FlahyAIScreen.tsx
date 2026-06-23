@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { Header } from '../components/Header';
+import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { API_BASE_URL, patientApiRoutes, WEB_APP_URL } from '../config';
 import { RootStackParamList } from '../navigation/types';
@@ -27,6 +28,7 @@ import api from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useChatStore } from '../store/chatStore';
 import { FLAHY_AI_SYSTEM_PROMPT } from '../constants/flahyAIPrompt';
+import { MEDICAL_DISCLAIMER } from '../constants/medicalDisclaimer';
 import { colors } from '../theme/colors';
 
 type Message = {
@@ -951,10 +953,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                   lineHeight: 22,
                 }}
               >
-                FlahyAI uses OpenAI, a third-party AI service provider, to
-                process your health data and queries in order to generate
-                insights and recommendations. Your report data and messages will
-                be sent to OpenAI when you use FlahyAI.
+                FlahyAI uses third-party AI service providers to process your
+                health data and queries in order to generate insights and
+                recommendations. Your report data and messages will be sent to
+                these providers when you use FlahyAI.
               </Text>
             </View>
 
@@ -1038,30 +1040,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                   fontSize: 14,
                   color: colors['text-secondary'],
                   lineHeight: 22,
-                  marginBottom: 6,
                 }}
               >
-                Your data is sent to:
-              </Text>
-              <Text
-                style={{
-                  fontSize: 14,
-                  color: colors['text-primary'],
-                  fontWeight: '600',
-                  lineHeight: 22,
-                }}
-              >
-                {'\u2022'} OpenAI, Inc. (https://openai.com)
-              </Text>
-              <Text
-                style={{
-                  fontSize: 14,
-                  color: colors['text-secondary'],
-                  lineHeight: 22,
-                  marginTop: 6,
-                }}
-              >
-                OpenAI provides the large language model (LLM) that powers
+                Your data is sent to trusted third-party AI service providers
+                that provide the large language model (LLM) technology powering
                 FlahyAI. Your data is used solely to generate responses and
                 health-related insights within FlahyAI.
               </Text>
@@ -1151,6 +1133,37 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 confidentiality, use data only for providing services to Flahy,
                 and implement appropriate security measures consistent with
                 applicable laws.
+              </Text>
+            </View>
+
+            <View
+              style={{
+                backgroundColor: '#FFFBEB',
+                borderRadius: 16,
+                padding: 20,
+                marginBottom: 24,
+                borderWidth: 1,
+                borderColor: '#FDE68A',
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: '600',
+                  color: colors['text-primary'],
+                  marginBottom: 12,
+                }}
+              >
+                Medical disclaimer
+              </Text>
+              <Text
+                style={{
+                  fontSize: 14,
+                  color: colors['text-secondary'],
+                  lineHeight: 22,
+                }}
+              >
+                {MEDICAL_DISCLAIMER}
               </Text>
             </View>
 
@@ -1386,6 +1399,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               keyboardHeight > 0 && { paddingBottom: keyboardHeight },
             ]}
           >
+            <MedicalDisclaimer variant="short" className="mx-4 mb-2" />
             <View style={inputStyles.bar}>
               <View style={inputStyles.iconCircle}>
                 <Sparkles size={20} color={colors.primary} />
