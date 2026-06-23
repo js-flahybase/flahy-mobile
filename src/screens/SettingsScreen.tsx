@@ -344,7 +344,7 @@ export const SettingsScreen = () => {
                                 {isLoading ? "Saving..." : (activeTab === 'Change Password' ? 'Update Password' : 'Save Changes')}
                             </Text>
                         </TouchableOpacity>
-                        
+
                         {/* Legal Links */}
                         <View style={{ marginTop: 24, gap: 12 }}>
                             <TouchableOpacity
