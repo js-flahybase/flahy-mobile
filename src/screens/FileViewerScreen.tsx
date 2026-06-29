@@ -1,5 +1,5 @@
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { ArrowLeft, Download, FileText } from 'lucide-react-native';
+import { ArrowLeft, FileText, Share2 } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -443,17 +443,9 @@ export const FileViewerScreen = ({ route, navigation }: any) => {
                 </Text>
 
                 <View style={s.headerActions}>
-                    {/* Download disabled: reports are view-only inside the app */}
-                    {/* <TouchableOpacity
-                        onPress={handleSaveFile}
-                        disabled={isSaving}
-                        style={[s.headerBtn, { backgroundColor: colors.teal }]}>
-                        {isSaving ? (
-                            <ActivityIndicator size="small" color="white" />
-                        ) : (
-                            <Download size={18} color="white" />
-                        )}
-                    </TouchableOpacity> */}
+                    <TouchableOpacity onPress={handleShare} style={s.headerBtn} accessibilityLabel="Share">
+                        <Share2 size={18} color="white" />
+                    </TouchableOpacity>
                 </View>
             </View>
 

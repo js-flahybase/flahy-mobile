@@ -1,10 +1,11 @@
-import { ArrowLeft, Calendar, ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, ChevronDown, ChevronRight, ExternalLink, X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import WebView from 'react-native-webview';
 import { CustomInput } from '../components/CustomInput';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { TabSwitcher } from '../components/TabSwitcher';
+import { WEB_APP_URL } from '../config';
 import { userService } from '../services/userService';
 import { useAuthStore } from '../store/authStore';
 import { colors } from '../theme/colors';
@@ -15,6 +16,16 @@ import { CustomAlert } from '../components/CustomAlert';
 const GENDER_OPTIONS = ['Male', 'Female', 'Other'];
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const isConsentMissingError = (err: any) => {
+    const status = err?.response?.status;
+    const errors = err?.response?.data?.errors;
+    return (
+        status === 412 &&
+        Array.isArray(errors) &&
+        errors.some((e: any) => e?.consentMissing === true)
+    );
+};
 
 function getDaysInMonth(month: number, year: number) {
     return new Date(year, month + 1, 0).getDate();
@@ -93,33 +104,46 @@ export const SettingsScreen = () => {
     const fetchProfile = async () => {
         setIsLoading(true);
         try {
-            const data = await userService.getProfile();
-            console.log("🚀 ~ fetchProfile ~ data:", data)
-            // Assuming data.user matches the structure, or adjust as needed
-            const userData = data.user || data; 
-            if (userData) {
-                 setUser(userData); // Update store
-                 setFirstName(userData.first_name || "");
-                 setLastName(userData.last_name || "");
-                 setEmail(userData.email || "");
-                 setPhone(userData.contact || "");
-                 if (userData.date_of_birth) {
-                     // Ensure we parse "YYYY-MM-DD" strictly in local time to avoid timezone offset shifts
-                     const dateStr = userData.date_of_birth.split('T')[0];
-                     if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-                         const [y, m, d] = dateStr.split('-');
-                         const localDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
-                         setDobDate(localDate);
-                         setDob(formatDate(localDate));
-                     } else {
-                         const d = new Date(userData.date_of_birth);
-                         setDobDate(d);
-                         setDob(formatDate(d));
-                     }
-                 }
-                 setGender(userData.gender || "");
+            const response = await userService.getProfile();
+            console.log("🚀 ~ fetchProfile ~ response:", response)
+            const userData =
+                response?.data?.user ||
+                response?.user ||
+                response?.data ||
+                response;
+
+            if (userData && typeof userData === 'object' && userData.id) {
+                const current = useAuthStore.getState().user;
+                setUser({ ...(current || {}), ...userData });
+                setFirstName(userData.first_name || "");
+                setLastName(userData.last_name || "");
+                setEmail(userData.email || "");
+                setPhone(userData.contact || "");
+                if (userData.date_of_birth) {
+                    // Ensure we parse "YYYY-MM-DD" strictly in local time to avoid timezone offset shifts
+                    const dateStr = userData.date_of_birth.split('T')[0];
+                    if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                        const [y, m, d] = dateStr.split('-');
+                        const localDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+                        setDobDate(localDate);
+                        setDob(formatDate(localDate));
+                    } else {
+                        const d = new Date(userData.date_of_birth);
+                        setDobDate(d);
+                        setDob(formatDate(d));
+                    }
+                }
+                setGender(userData.gender || "");
+            } else {
+                console.warn("fetchProfile: unexpected profile response shape", response);
+                showAlert("Error", "Failed to load profile data", 'error');
             }
         } catch (error) {
+            if (isConsentMissingError(error)) {
+                // @ts-ignore
+                navigation.navigate('ConsentRequired');
+                return;
+            }
             console.error("Failed to fetch profile", error);
             showAlert("Error", "Failed to load profile data", 'error');
         } finally {
@@ -320,7 +344,7 @@ export const SettingsScreen = () => {
                                 {isLoading ? "Saving..." : (activeTab === 'Change Password' ? 'Update Password' : 'Save Changes')}
                             </Text>
                         </TouchableOpacity>
-                        
+
                         {/* Legal Links */}
                         <View style={{ marginTop: 24, gap: 12 }}>
                             <TouchableOpacity
@@ -493,6 +517,188 @@ export const SettingsScreen = () => {
                     )}
                 </View>
             </Modal>
+
+            <CustomAlert
+                visible={alertConfig.visible}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                type={alertConfig.type}
+                onClose={hideAlert}
+            />
+        </ScreenWrapper>
+    );
+};
+
+const TERMS_URL = `${WEB_APP_URL}/terms-condition`;
+const PRIVACY_URL = `${WEB_APP_URL}/privacy-policy-mobile`;
+
+export const ConsentRequiredScreen = () => {
+    const navigation = useNavigation();
+    const user = useAuthStore(s => s.user);
+    const setUser = useAuthStore(s => s.setUser);
+
+    const [showWeb, setShowWeb] = useState<'terms' | 'privacy'>('terms');
+    const [termsAccepted, setTermsAccepted] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+
+    const [alertConfig, setAlertConfig] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        type: 'success' | 'error' | 'info';
+    }>({
+        visible: false,
+        title: '',
+        message: '',
+        type: 'info',
+    });
+
+    const showAlert = (title: string, message: string, type: 'success' | 'error' | 'info' = 'info') => {
+        setAlertConfig({ visible: true, title, message, type });
+    };
+
+    const hideAlert = () => {
+        setAlertConfig(prev => ({ ...prev, visible: false }));
+    };
+
+    const webUrl = showWeb === 'privacy' ? PRIVACY_URL : TERMS_URL;
+
+    const handleAccept = async () => {
+        if (isSaving) return;
+        if (!termsAccepted) {
+            showAlert('Required', 'Please confirm you accept the Terms & Conditions and Privacy Policy.', 'error');
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            await userService.acceptConsent();
+
+            const profile = await userService.getProfile();
+            const freshUser = profile?.data?.user || profile?.user || profile?.data || profile;
+            if (freshUser && typeof freshUser === 'object') {
+                setUser({ ...(user || {}), ...freshUser });
+            }
+
+            // @ts-ignore
+            navigation.goBack();
+        } catch (error: any) {
+            const status = error?.response?.status;
+            const msg = error?.response?.data?.message || error?.message || 'Failed to save consent.';
+            if (status === 412) {
+                showAlert('Action needed', 'Please accept the terms and try again.', 'error');
+            } else {
+                showAlert('Error', msg, 'error');
+            }
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <ScreenWrapper style={{ flex: 1, backgroundColor: '#FFFFF0' }} edges={['top', 'left', 'right']}>
+            <View style={{ paddingHorizontal: 24, paddingVertical: 16, flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity onPress={() => {
+                    // @ts-ignore
+                    navigation.goBack();
+                }}>
+                    <ArrowLeft size={24} color={colors['text-primary']} />
+                </TouchableOpacity>
+                <Text style={{ flex: 1, textAlign: 'center', fontSize: 18, fontWeight: 'bold', color: colors['text-primary'], marginRight: 24 }}>
+                    Accept Terms
+                </Text>
+            </View>
+
+            <ScrollView
+                contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 24 }}
+                showsVerticalScrollIndicator={false}
+            >
+                <View style={{ backgroundColor: 'white', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', overflow: 'hidden' }}>
+                    <View style={{ flexDirection: 'row' }}>
+                        <TouchableOpacity
+                            onPress={() => setShowWeb('terms')}
+                            style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: showWeb === 'terms' ? '#E7F6F5' : 'white' }}
+                        >
+                            <Text style={{ color: showWeb === 'terms' ? colors.teal : colors['text-secondary'], fontWeight: '600' }}>
+                                Terms
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => setShowWeb('privacy')}
+                            style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: showWeb === 'privacy' ? '#E7F6F5' : 'white' }}
+                        >
+                            <Text style={{ color: showWeb === 'privacy' ? colors.teal : colors['text-secondary'], fontWeight: '600' }}>
+                                Privacy
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={{ height: 420 }}>
+                        <WebView
+                            source={{ uri: webUrl }}
+                            startInLoadingState
+                            renderLoading={() => (
+                                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                                    <ActivityIndicator size="large" color={colors.teal} />
+                                </View>
+                            )}
+                        />
+                    </View>
+                </View>
+
+                <TouchableOpacity
+                    onPress={() => Linking.openURL(webUrl)}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 16 }}
+                >
+                    <ExternalLink size={16} color={colors.teal} />
+                    <Text style={{ color: colors.teal, marginLeft: 8, fontWeight: '600' }}>
+                        Open in browser
+                    </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', marginTop: 24 }}
+                    onPress={() => setTermsAccepted(v => !v)}
+                    activeOpacity={0.8}
+                >
+                    <View style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 4,
+                        borderWidth: 1,
+                        borderColor: termsAccepted ? colors.teal : '#9CA3AF',
+                        backgroundColor: termsAccepted ? colors.teal : 'white',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12
+                    }}>
+                        {termsAccepted && <Text style={{ color: 'white', fontSize: 12 }}>✓</Text>}
+                    </View>
+                    <Text style={{ color: colors['text-secondary'], fontSize: 13, flex: 1 }}>
+                        I have read and accept the Terms & Conditions and Privacy Policy.
+                    </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    onPress={handleAccept}
+                    disabled={isSaving}
+                    style={{
+                        backgroundColor: '#2CAEA6',
+                        height: 56,
+                        borderRadius: 12,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginTop: 20,
+                        opacity: isSaving ? 0.75 : 1
+                    }}
+                >
+                    {isSaving ? (
+                        <ActivityIndicator color="white" />
+                    ) : (
+                        <Text style={{ color: 'white', fontWeight: '600', fontSize: 18 }}>Continue</Text>
+                    )}
+                </TouchableOpacity>
+            </ScrollView>
 
             <CustomAlert
                 visible={alertConfig.visible}

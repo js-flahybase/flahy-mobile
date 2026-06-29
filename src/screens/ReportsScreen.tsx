@@ -2,6 +2,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -218,6 +219,9 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                             keyExtractor={item => item.id}
                             contentContainerStyle={{ padding: 24, paddingTop: 0, paddingBottom: 20 }}
                             showsVerticalScrollIndicator={false}
+                            ListHeaderComponent={
+                                <MedicalDisclaimer variant="full" className="mb-4" />
+                            }
                             ListEmptyComponent={
                                 <View className="py-10 items-center">
                                     <Text className="text-text-secondary">No reports found.</Text>

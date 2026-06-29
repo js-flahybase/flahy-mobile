@@ -10,6 +10,16 @@ import { ScreenWrapper } from '../components/ScreenWrapper';
 import { userService } from '../services/userService';
 import { useAuthStore } from '../store/authStore';
 
+const isConsentMissingError = (err: any) => {
+    const status = err?.response?.status;
+    const errors = err?.response?.data?.errors;
+    return (
+        status === 412 &&
+        Array.isArray(errors) &&
+        errors.some((e: any) => e?.consentMissing === true)
+    );
+};
+
 // Configure locale if needed (optional, keeping default for now)
 LocaleConfig.locales['en'] = {
   monthNames: [
@@ -80,6 +90,11 @@ export const SchedulePickupScreen = () => {
                     useAuthStore.getState().setUser(freshUser);
                 }
             } catch (err) {
+                if (isConsentMissingError(err)) {
+                    // @ts-ignore
+                    navigation.navigate('ConsentRequired');
+                    return;
+                }
                 console.error("Failed to refresh profile after scheduling", err);
                  // Fallback: update locally if fetch fails
                  const user = useAuthStore.getState().user;

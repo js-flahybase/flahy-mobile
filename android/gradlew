@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Add Homebrew to PATH for cases where Android Studio is launched from the GUI
+export PATH=$PATH:/opt/homebrew/bin:/usr/local/bin
+
 #
 # Copyright © 2015 the original authors.
 #
