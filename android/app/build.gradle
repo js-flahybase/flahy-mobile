@@ -77,13 +77,13 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.flahy"
+    namespace "app.flahyhealth.com"
     defaultConfig {
-        applicationId "com.flahy"
+        applicationId "app.flahyhealth.com"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 10
-        versionName "1.2.1"
+        versionCode 1
+        versionName "1.0.0"
     }
     signingConfigs {
         debug {
