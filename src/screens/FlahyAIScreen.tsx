@@ -724,16 +724,38 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   // rather than compressing them.
   const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
+  const normalizeFsPath = (uri: string) => {
+    // react-native-blob-util expects a filesystem path, not a file:// URI.
+    // iOS image-picker returns file:///... which otherwise fails with
+    // "No such file 'file:...'".
+    let path = uri;
+    if (path.startsWith('file://')) {
+      path = path.replace('file://', '');
+    }
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      // keep original if decode fails
+    }
+    return path;
+  };
+
   const readAttachmentAsset = async (asset: {
     uri?: string;
     fileName?: string;
     type?: string;
     fileSize?: number;
+    base64?: string;
   }) => {
     if (!asset.uri) return;
 
     try {
-      const base64 = await ReactNativeBlobUtil.fs.readFile(asset.uri, 'base64');
+      let base64 = asset.base64;
+      if (!base64) {
+        const path = normalizeFsPath(asset.uri);
+        base64 = await ReactNativeBlobUtil.fs.readFile(path, 'base64');
+      }
+
       const approxBytes = asset.fileSize ?? base64.length * 0.75;
       if (approxBytes > MAX_ATTACHMENT_BYTES) {
         Alert.alert('Photo Too Large', 'Please choose a photo under 8MB.');
@@ -753,7 +775,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   };
 
   const handleGalleryAttach = async () => {
-    const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
+    const result = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+      includeBase64: true,
+    });
     if (result.assets && result.assets[0]) {
       await readAttachmentAsset(result.assets[0]);
     }
@@ -782,7 +808,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       }
     }
 
-    const result = await launchCamera({ mediaType: 'photo', saveToPhotos: true });
+    const result = await launchCamera({
+      mediaType: 'photo',
+      saveToPhotos: true,
+      includeBase64: true,
+    });
     if (result.assets && result.assets[0]) {
       await readAttachmentAsset(result.assets[0]);
     }

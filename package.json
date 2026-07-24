@@ -31,6 +31,7 @@
     "react-native-css-interop": "^0.2.1",
     "react-native-date-picker": "^5.0.13",
     "react-native-fast-image": "^8.6.3",
+    "react-native-gesture-handler": "^3.1.0",
     "react-native-image-picker": "^8.2.1",
     "react-native-keyboard-aware-scroll-view": "^0.9.5",
     "react-native-pdf": "^7.0.3",
