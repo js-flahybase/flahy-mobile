@@ -1,15 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { FileText, Send, Shield, Sparkles } from 'lucide-react-native';
+import { FileText, Paperclip, Send, Shield, X } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
@@ -19,6 +21,7 @@ import {
   View,
 } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { Header } from '../components/Header';
 import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
@@ -36,6 +39,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   isStreaming?: boolean;
+  attachment?: { uri: string; mediaType: string; fileName?: string };
 };
 
 const SUGGESTIONS = [
@@ -456,7 +460,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
           isStreaming: true,
         };
       }
-      return { id: m.id, role: m.role, content: m.content };
+      return { id: m.id, role: m.role, content: m.content, attachment: m.attachment };
     }),
   ];
 
@@ -464,6 +468,20 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   const reportFileRef = useRef<ReportFile | null>(null);
   // Report text (used for HTML/JSON reports) — injected as REPORT_TEXT in system prompt.
   const reportTextRef = useRef<string | null>(null);
+
+  // In-memory cache of base64 for user-attached photos, keyed by message id.
+  // Deliberately NOT persisted — cleared on app restart so we never resend a
+  // stale/oversized image blob, but stays available for follow-up questions
+  // within the same live session.
+  const attachmentCacheRef = useRef<Map<string, { base64: string; mediaType: string }>>(
+    new Map(),
+  );
+  const [pendingAttachment, setPendingAttachment] = useState<{
+    uri: string;
+    mediaType: string;
+    fileName?: string;
+    base64: string;
+  } | null>(null);
 
   const scrollToBottom = (animated = true) => {
     const offset = contentHeightRef.current - layoutHeightRef.current;
@@ -701,19 +719,113 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     }
   };
 
+  // Max raw photo size accepted for a chat attachment. No image-resize
+  // library exists in this app today, so we simply reject oversized photos
+  // rather than compressing them.
+  const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+  const readAttachmentAsset = async (asset: {
+    uri?: string;
+    fileName?: string;
+    type?: string;
+    fileSize?: number;
+  }) => {
+    if (!asset.uri) return;
+
+    try {
+      const base64 = await ReactNativeBlobUtil.fs.readFile(asset.uri, 'base64');
+      const approxBytes = asset.fileSize ?? base64.length * 0.75;
+      if (approxBytes > MAX_ATTACHMENT_BYTES) {
+        Alert.alert('Photo Too Large', 'Please choose a photo under 8MB.');
+        return;
+      }
+
+      setPendingAttachment({
+        uri: asset.uri,
+        mediaType: asset.type || 'image/jpeg',
+        fileName: asset.fileName,
+        base64,
+      });
+    } catch (err) {
+      console.error('Failed to read attachment:', err);
+      Alert.alert('Error', 'Could not load that photo. Please try again.');
+    }
+  };
+
+  const handleGalleryAttach = async () => {
+    const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
+    if (result.assets && result.assets[0]) {
+      await readAttachmentAsset(result.assets[0]);
+    }
+  };
+
+  const handleCameraAttach = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera Permission',
+            message: 'Flahy needs access to your camera to take photos.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          },
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
+          return;
+        }
+      } catch (err) {
+        console.warn(err);
+        return;
+      }
+    }
+
+    const result = await launchCamera({ mediaType: 'photo', saveToPhotos: true });
+    if (result.assets && result.assets[0]) {
+      await readAttachmentAsset(result.assets[0]);
+    }
+  };
+
+  const handleAttachPress = () => {
+    Alert.alert('Add Photo', 'Choose source', [
+      { text: 'Camera', onPress: handleCameraAttach },
+      { text: 'Photo Library', onPress: handleGalleryAttach },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   const sendMessage = async (text: string = inputText) => {
     const msgText = text.trim();
-    if (!msgText || isLoading) return;
+    if ((!msgText && !pendingAttachment) || isLoading) return;
 
+    const attachmentToSend = pendingAttachment;
     const userMsgId = Date.now().toString();
     const userMsg = {
       id: userMsgId,
       role: 'user' as const,
       content: msgText,
+      ...(attachmentToSend
+        ? {
+            attachment: {
+              uri: attachmentToSend.uri,
+              mediaType: attachmentToSend.mediaType,
+              fileName: attachmentToSend.fileName,
+            },
+          }
+        : {}),
     };
 
     storeAddMessage(userMsg);
+    if (attachmentToSend) {
+      attachmentCacheRef.current.set(userMsgId, {
+        base64: attachmentToSend.base64,
+        mediaType: attachmentToSend.mediaType,
+      });
+    }
     setInputText('');
+    setPendingAttachment(null);
     setIsLoading(true);
 
     const aiMsgId = (Date.now() + 1).toString();
@@ -736,7 +848,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       const filteredMessages = allMessages.filter(
         m =>
           m.id !== aiMsgId && // skip the empty AI placeholder
-          m.content && // skip empty
+          (m.content || m.attachment) && // skip empty (unless it carries an attachment)
           !m.content.startsWith('Error:') && // skip error messages
           m.content !== 'No response received.' && // skip failed responses
           m.content !== 'Thinking...', // skip placeholders
@@ -756,6 +868,19 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             mediaType: report.mediaType,
             url: `data:${report.mediaType};base64,${report.base64}`,
           });
+        }
+
+        // Attach a user-picked photo, if it's still in the in-memory cache
+        // (cleared on app restart — see attachmentCacheRef declaration).
+        if (m.role === 'user') {
+          const cachedAttachment = attachmentCacheRef.current.get(m.id);
+          if (cachedAttachment) {
+            parts.push({
+              type: 'file',
+              mediaType: cachedAttachment.mediaType,
+              url: `data:${cachedAttachment.mediaType};base64,${cachedAttachment.base64}`,
+            });
+          }
         }
 
         return { id: m.id, role: m.role, parts };
@@ -1380,11 +1505,27 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                           />
                         )}
                       </>
-                    ) : item.content ? (
-                      <Text className="text-base leading-6 text-white">
-                        {item.content}
-                      </Text>
-                    ) : null}
+                    ) : (
+                      <>
+                        {item.attachment && (
+                          <Image
+                            source={{ uri: item.attachment.uri }}
+                            style={{
+                              width: 180,
+                              height: 180,
+                              borderRadius: 12,
+                              marginBottom: item.content ? 8 : 0,
+                            }}
+                            resizeMode="cover"
+                          />
+                        )}
+                        {item.content ? (
+                          <Text className="text-base leading-6 text-white">
+                            {item.content}
+                          </Text>
+                        ) : null}
+                      </>
+                    )}
                   </View>
                 </View>
               )}
@@ -1400,10 +1541,28 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             ]}
           >
             <MedicalDisclaimer variant="short" className="mx-4 mb-2" />
-            <View style={inputStyles.bar}>
-              <View style={inputStyles.iconCircle}>
-                <Sparkles size={20} color={colors.primary} />
+            {pendingAttachment && (
+              <View style={inputStyles.attachmentPreviewRow}>
+                <Image
+                  source={{ uri: pendingAttachment.uri }}
+                  style={inputStyles.attachmentPreviewImage}
+                  resizeMode="cover"
+                />
+                <TouchableOpacity
+                  onPress={() => setPendingAttachment(null)}
+                  style={inputStyles.attachmentRemoveBtn}
+                >
+                  <X size={14} color="white" />
+                </TouchableOpacity>
               </View>
+            )}
+            <View style={inputStyles.bar}>
+              <TouchableOpacity
+                style={inputStyles.iconCircle}
+                onPress={handleAttachPress}
+              >
+                <Paperclip size={20} color={colors.primary} />
+              </TouchableOpacity>
               <View style={inputStyles.inputWrap}>
                 <TextInput
                   value={inputText}
@@ -1417,10 +1576,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               </View>
               <TouchableOpacity
                 onPress={() => sendMessage()}
-                disabled={isLoading || !inputText.trim()}
+                disabled={isLoading || (!inputText.trim() && !pendingAttachment)}
                 style={[
                   inputStyles.sendBtn,
-                  isLoading || !inputText.trim()
+                  isLoading || (!inputText.trim() && !pendingAttachment)
                     ? inputStyles.sendBtnDisabled
                     : inputStyles.sendBtnActive,
                 ]}
@@ -1431,7 +1590,9 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                   <Send
                     size={18}
                     color={
-                      !inputText.trim() ? colors['text-secondary'] : 'white'
+                      !inputText.trim() && !pendingAttachment
+                        ? colors['text-secondary']
+                        : 'white'
                     }
                   />
                 )}
@@ -1565,6 +1726,30 @@ const inputStyles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     backgroundColor: '#f9fafb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentPreviewRow: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    width: 64,
+    height: 64,
+    marginHorizontal: 8,
+    marginBottom: 8,
+  },
+  attachmentPreviewImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+  },
+  attachmentRemoveBtn: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
   },

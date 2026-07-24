@@ -6,7 +6,7 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  imageUri?: string;
+  attachment?: { uri: string; mediaType: string; fileName?: string };
   synced: boolean;
 }
 
@@ -27,7 +27,10 @@ interface ChatState {
 
   // Message actions
   addMessage: (msg: Omit<ChatMessage, 'synced'>) => void;
-  updateMessage: (id: string, updates: Partial<Pick<ChatMessage, 'content'>>) => void;
+  updateMessage: (
+    id: string,
+    updates: Partial<Pick<ChatMessage, 'content' | 'attachment'>>,
+  ) => void;
   setMessages: (msgs: Omit<ChatMessage, 'synced'>[]) => void;
 
   // Sync helpers
