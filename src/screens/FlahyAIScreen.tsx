@@ -300,6 +300,11 @@ type ReportFile = {
 };
 
 const MAX_REPORT_TEXT_CHARS = 12000;
+// Cap how many reports get their full binary (PDF/image) sent to the AI.
+// Every message resends the whole conversation including these attachments,
+// so keeping this low is what keeps replies fast. All reports still
+// contribute their text content (see textSections) regardless of this cap.
+const MAX_FILE_ATTACHMENTS = 1;
 
 function getMimeTypeFromName(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -464,9 +469,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     }),
   ];
 
-  // Report file data — attached to the first user message (same as web)
-  const reportFileRef = useRef<ReportFile | null>(null);
-  // Report text (used for HTML/JSON reports) — injected as REPORT_TEXT in system prompt.
+  // All of the user's report files (PDF/image ones) — attached to the first
+  // user message (same as web), one `file` part per report.
+  const reportFilesRef = useRef<ReportFile[]>([]);
+  // Combined text of all HTML/JSON/plain-text reports — injected as REPORT_TEXT
+  // in the system prompt, one section per report.
   const reportTextRef = useRef<string | null>(null);
 
   // In-memory cache of base64 for user-attached photos, keyed by message id.
@@ -522,42 +529,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   // Initialize thread + load report on mount
   useEffect(() => {
     if (!currentThreadId) createThread();
-    loadLatestReport();
+    loadReports();
   }, []);
 
-  const convertHtmlToPdfBase64 = async (
-    html: string,
-  ): Promise<string | null> => {
-    try {
-      const response = await fetch(`${WEB_APP_URL}/api/html-to-pdf`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ html }),
-      });
-      if (!response.ok) return null;
-      // Read as base64 via blob util style path. Fallback to text hex decoding isn't safe for binary,
-      // so use blob() + FileReader-equivalent via arrayBuffer -> base64.
-      const arrayBuffer = await response.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = '';
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(
-          null,
-          Array.from(bytes.subarray(i, i + chunkSize)) as any,
-        );
-      }
-      const btoaFn = (globalThis as any).btoa as
-        | ((s: string) => string)
-        | undefined;
-      return typeof btoaFn === 'function' ? btoaFn(binary) : null;
-    } catch (err) {
-      console.error('html-to-pdf conversion failed:', err);
-      return null;
-    }
-  };
-
-  const loadLatestReport = async () => {
+  const loadReports = async () => {
     setIsInitializing(true);
     try {
       const token = useAuthStore.getState().token;
@@ -586,129 +561,150 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         return;
       }
 
-      const latestReport = reports[0];
-      const fileName: string =
-        latestReport.file_name || `report-${latestReport.id}`;
-
-      // 2. Download the actual report file as base64
-      const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${latestReport.id}`;
-      const downloadResponse = await ReactNativeBlobUtil.fetch(
-        'GET',
-        downloadUrl,
-        {
-          Authorization: `Bearer ${token}`,
-        },
-      );
-
-      const respHeaders = (downloadResponse as any).respInfo?.headers;
-      const headerCT = normalizeContentType(
-        pickHeader(respHeaders, 'content-type') ||
-          pickHeader(respHeaders, 'Content-Type') ||
-          '',
-      );
-      const nameCT = normalizeContentType(getMimeTypeFromName(fileName));
-      let effectiveCT = headerCT || nameCT;
-
       // Reset any previous report context
-      reportFileRef.current = null;
+      reportFilesRef.current = [];
       reportTextRef.current = null;
+      const textSections: string[] = [];
 
-      // Read as text if the content-type or filename hints at text; sniff a 2KB
-      // sample before committing so a misreported content-type can't strand the AI
-      // with a useless binary payload.
-      const maybeText =
-        effectiveCT === 'text/html' ||
-        effectiveCT === 'application/json' ||
-        effectiveCT.startsWith('text/') ||
-        !effectiveCT ||
-        effectiveCT === 'application/octet-stream';
-
-      let textContent: string | null = null;
-      if (maybeText) {
+      // 2. Download every report as base64, one at a time. Each report is
+      // independent — if one fails to download/parse, the rest still load.
+      for (const reportMeta of reports) {
+        const fileName: string =
+          reportMeta.file_name || `report-${reportMeta.id}`;
         try {
-          const raw: string = (downloadResponse as any).text?.() ?? '';
-          if (raw) textContent = raw;
-        } catch (err) {
-          console.warn(
-            'downloadResponse.text() failed, falling back to base64 decode:',
-            err,
+          const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${reportMeta.id}`;
+          const downloadResponse = await ReactNativeBlobUtil.fetch(
+            'GET',
+            downloadUrl,
+            {
+              Authorization: `Bearer ${token}`,
+            },
+          );
+
+          const respHeaders = (downloadResponse as any).respInfo?.headers;
+          const headerCT = normalizeContentType(
+            pickHeader(respHeaders, 'content-type') ||
+              pickHeader(respHeaders, 'Content-Type') ||
+              '',
+          );
+          const nameCT = normalizeContentType(getMimeTypeFromName(fileName));
+          let effectiveCT = headerCT || nameCT;
+
+          // Read as text if the content-type or filename hints at text; sniff a 2KB
+          // sample before committing so a misreported content-type can't strand the AI
+          // with a useless binary payload.
+          const maybeText =
+            effectiveCT === 'text/html' ||
+            effectiveCT === 'application/json' ||
+            effectiveCT.startsWith('text/') ||
+            !effectiveCT ||
+            effectiveCT === 'application/octet-stream';
+
+          let textContent: string | null = null;
+          if (maybeText) {
+            try {
+              const raw: string = (downloadResponse as any).text?.() ?? '';
+              if (raw) textContent = raw;
+            } catch (err) {
+              console.warn(
+                'downloadResponse.text() failed, falling back to base64 decode:',
+                err,
+              );
+            }
+            if (!textContent) {
+              const b64 = downloadResponse.base64();
+              const decoded = decodeBase64Utf8(b64);
+              if (decoded) textContent = decoded;
+            }
+          }
+
+          // If sniff identifies HTML/JSON, override a lying/missing content-type.
+          if (textContent) {
+            const sample = textContent.slice(0, 2048);
+            if (effectiveCT !== 'text/html' && looksLikeHtml(sample))
+              effectiveCT = 'text/html';
+            else if (
+              effectiveCT !== 'application/json' &&
+              looksLikeJson(sample)
+            )
+              effectiveCT = 'application/json';
+          }
+
+          if (effectiveCT === 'text/html' && textContent) {
+            // Expose the report as REPORT_TEXT — this captures the full text
+            // content of the report. We deliberately do NOT also attach a
+            // converted PDF here: it's redundant with the text above (same
+            // content, no extra info the AI doesn't already have) and was
+            // the single biggest contributor to oversized chat requests that
+            // failed outright (a converted report PDF alone measured ~5MB,
+            // likely exceeding the backend's request size limit).
+            const plain = htmlToPlainText(textContent);
+            if (plain) textSections.push(`--- Report: ${fileName} ---\n${plain}`);
+          } else if (effectiveCT === 'application/json' && textContent) {
+            const formatted = jsonToReportText(textContent);
+            if (formatted)
+              textSections.push(`--- Report: ${fileName} ---\n${formatted}`);
+          } else if (
+            effectiveCT === 'application/pdf' ||
+            effectiveCT.startsWith('image/')
+          ) {
+            if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+              reportFilesRef.current.push({
+                base64: downloadResponse.base64(),
+                mediaType: effectiveCT,
+                filename: fileName,
+              });
+            } else {
+              // Over the attachment cap and there's no text form of this
+              // report — at least tell the AI it exists by name.
+              textSections.push(
+                `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+              );
+            }
+          } else if (textContent) {
+            // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
+            const trimmed = textContent.trim().slice(0, MAX_REPORT_TEXT_CHARS);
+            if (trimmed)
+              textSections.push(`--- Report: ${fileName} ---\n${trimmed}`);
+          } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+            // Unknown binary — fall back to filename-based MIME as a best guess.
+            reportFilesRef.current.push({
+              base64: downloadResponse.base64(),
+              mediaType: nameCT,
+              filename: fileName,
+            });
+          } else {
+            textSections.push(
+              `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+            );
+          }
+        } catch (err: any) {
+          console.error(
+            `Failed to load report "${fileName}":`,
+            err?.message,
           );
         }
-        if (!textContent) {
-          const b64 = downloadResponse.base64();
-          const decoded = decodeBase64Utf8(b64);
-          if (decoded) textContent = decoded;
-        }
       }
 
-      // If sniff identifies HTML/JSON, override a lying/missing content-type.
-      if (textContent) {
-        const sample = textContent.slice(0, 2048);
-        if (effectiveCT !== 'text/html' && looksLikeHtml(sample))
-          effectiveCT = 'text/html';
-        else if (effectiveCT !== 'application/json' && looksLikeJson(sample))
-          effectiveCT = 'application/json';
+      if (textSections.length > 0) {
+        reportTextRef.current = textSections.join('\n\n');
       }
 
-      if (effectiveCT === 'text/html' && textContent) {
-        // Always expose the report as REPORT_TEXT so the AI has it even if PDF
-        // conversion fails or the chat route can't read a PDF attachment.
-        const plain = htmlToPlainText(textContent);
-        if (plain) reportTextRef.current = plain;
-
-        // Best-effort: also convert to PDF so vision models can see layout.
-        // If this fails (e.g. html-to-pdf endpoint is unavailable) we still have REPORT_TEXT.
-        const pdfBase64 = await convertHtmlToPdfBase64(textContent);
-        if (pdfBase64) {
-          reportFileRef.current = {
-            base64: pdfBase64,
-            mediaType: 'application/pdf',
-            filename: fileName.replace(/\.(html?|json)$/i, '') + '.pdf',
-          };
-        }
-      } else if (effectiveCT === 'application/json' && textContent) {
-        const formatted = jsonToReportText(textContent);
-        if (formatted) reportTextRef.current = formatted;
-      } else if (
-        effectiveCT === 'application/pdf' ||
-        effectiveCT.startsWith('image/')
-      ) {
-        reportFileRef.current = {
-          base64: downloadResponse.base64(),
-          mediaType: effectiveCT,
-          filename: fileName,
-        };
-      } else if (textContent) {
-        // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
-        const trimmed = textContent.trim().slice(0, MAX_REPORT_TEXT_CHARS);
-        if (trimmed) reportTextRef.current = trimmed;
-      } else {
-        // Unknown binary — fall back to filename-based MIME as a best guess.
-        reportFileRef.current = {
-          base64: downloadResponse.base64(),
-          mediaType: nameCT,
-          filename: fileName,
-        };
-      }
-
-      console.log('[FlahyAI] report loaded:', {
-        fileName,
-        headerCT,
-        effectiveCT,
+      console.log('[FlahyAI] reports loaded:', {
+        reportCount: reports.length,
+        filesAttached: reportFilesRef.current.length,
         hasText: !!reportTextRef.current,
         textLen: reportTextRef.current?.length ?? 0,
-        hasFile: !!reportFileRef.current,
-        fileMedia: reportFileRef.current?.mediaType,
       });
 
-      // 3. Show generic greeting (report loaded silently in background)
+      // 3. Show generic greeting (reports loaded silently in background)
       setGreetingMessage({
         id: 'greeting',
         role: 'assistant',
         content: 'Hello! I am FlahyAI. How can I help you today?',
       });
     } catch (error: any) {
-      console.error('Failed to load report:', error?.message);
+      console.error('Failed to load reports:', error?.message);
       setGreetingMessage({
         id: 'greeting',
         role: 'assistant',
@@ -884,20 +880,22 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
           m.content !== 'Thinking...', // skip placeholders
       );
 
-      // Find the first user message index to attach the report file
+      // Find the first user message index to attach the report files
       const firstUserIdx = filteredMessages.findIndex(m => m.role === 'user');
-      const report = reportFileRef.current;
+      const reports = reportFilesRef.current;
 
       const apiMessages = filteredMessages.map((m, idx) => {
         const parts: any[] = [{ type: 'text', text: m.content }];
 
-        // Attach report file to the first user message (same as web)
-        if (idx === firstUserIdx && m.role === 'user' && report) {
-          parts.push({
-            type: 'file',
-            mediaType: report.mediaType,
-            url: `data:${report.mediaType};base64,${report.base64}`,
-          });
+        // Attach every report file to the first user message (same as web)
+        if (idx === firstUserIdx && m.role === 'user') {
+          for (const report of reports) {
+            parts.push({
+              type: 'file',
+              mediaType: report.mediaType,
+              url: `data:${report.mediaType};base64,${report.base64}`,
+            });
+          }
         }
 
         // Attach a user-picked photo, if it's still in the in-memory cache
@@ -921,20 +919,28 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         ? `${FLAHY_AI_SYSTEM_PROMPT}\n\nREPORT_TEXT:\n${reportText}`
         : FLAHY_AI_SYSTEM_PROMPT;
 
+      const requestBody = JSON.stringify({
+        messages: apiMessages,
+        system: effectiveSystem,
+        tools: {},
+      });
+      console.log('[FlahyAI][perf] request payload size (bytes):', requestBody.length);
+      const requestStartedAt = Date.now();
+
       const response = await fetch(`${WEB_APP_URL}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          messages: apiMessages,
-          system: effectiveSystem,
-          tools: {},
-        }),
+        body: requestBody,
         // @ts-ignore — React Native specific option for text streaming
         reactNative: { textStreaming: true },
       });
+      console.log(
+        '[FlahyAI][perf] headers received after (ms):',
+        Date.now() - requestStartedAt,
+      );
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => 'Unknown error');
@@ -946,6 +952,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       // Streaming path — RN 0.71+ with textStreaming enabled
       if (response.body && typeof response.body.getReader === 'function') {
         const reader = response.body.getReader();
+        let firstChunkLogged = false;
         const decoder = new TextDecoder();
         let buffer = '';
         let fullContent = '';
@@ -953,6 +960,14 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+
+          if (!firstChunkLogged) {
+            firstChunkLogged = true;
+            console.log(
+              '[FlahyAI][perf] first stream chunk after (ms):',
+              Date.now() - requestStartedAt,
+            );
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -974,6 +989,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             fullContent += delta;
           }
         }
+
+        console.log(
+          '[FlahyAI][perf] full reply finished after (ms):',
+          Date.now() - requestStartedAt,
+        );
 
         // Finalize: persist completed content to store, clear streaming state
         storeUpdateMessage(aiMsgId, {
