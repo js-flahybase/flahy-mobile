@@ -299,7 +299,10 @@ type ReportFile = {
   filename: string;
 };
 
-const MAX_REPORT_TEXT_CHARS = 12000;
+// Only one report is ever sent to the AI (see loadReports), so this can
+// safely be generous without ballooning the request size. This is a safety
+// cap against a truly pathological report, not an expected truncation point.
+const MAX_REPORT_TEXT_CHARS = 100000;
 // Cap how many reports get their full binary (PDF/image) sent to the AI.
 // Every message resends the whole conversation including these attachments,
 // so keeping this low is what keeps replies fast. All reports still
@@ -566,9 +569,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       reportTextRef.current = null;
       const textSections: string[] = [];
 
-      // 2. Download every report as base64, one at a time. Each report is
-      // independent — if one fails to download/parse, the rest still load.
-      for (const reportMeta of reports) {
+      // 2. Only give the AI the most recent report (reports[0] — the user
+      // can still see and browse every report elsewhere in the app; this
+      // just keeps what's sent to FlahyAI small and fast).
+      for (const reportMeta of reports.slice(0, 1)) {
         const fileName: string =
           reportMeta.file_name || `report-${reportMeta.id}`;
         try {
