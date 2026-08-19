@@ -199,7 +199,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                     
                     {/* Header */}
                     <View className="px-6 py-6 flex-row items-center justify-between">
-                        <Text className="text-2xl font-bold text-text-primary">Your Flahy Reports</Text>
+                        <Text className="text-2xl font-bold text-text-primary">Your Flahy Results</Text>
                         <TouchableOpacity 
                             onPress={() => navigation.goBack()}
                             className="p-2"
@@ -219,9 +219,9 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                             keyExtractor={item => item.id}
                             contentContainerStyle={{ padding: 24, paddingTop: 0, paddingBottom: 20 }}
                             showsVerticalScrollIndicator={false}
-                            ListHeaderComponent={
-                                <MedicalDisclaimer variant="full" className="mb-4" />
-                            }
+                            // ListHeaderComponent={
+                            //     <MedicalDisclaimer variant="full" className="mb-4" />
+                            // }
                             ListEmptyComponent={
                                 <View className="py-10 items-center">
                                     <Text className="text-text-secondary">No reports found.</Text>

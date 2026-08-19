@@ -533,7 +533,7 @@ export const DashboardScreen = () => {
             >
               <Calendar size={20} color="white" />
               <Text className="ml-2 text-base font-semibold text-white">
-                Schedule Pick-up
+                Schedule Blood Draw
               </Text>
             </TouchableOpacity>
           )}
