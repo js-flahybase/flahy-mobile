@@ -1,78 +1,13 @@
 import { useNavigation } from '@react-navigation/native';
-import { ArrowLeft, ChevronDown } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { ActivityIndicator, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ArrowLeft } from 'lucide-react-native';
+import React, { useMemo, useState } from 'react';
+import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Calendar, DateData, LocaleConfig } from 'react-native-calendars';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { CustomAlert } from '../components/CustomAlert';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { userService } from '../services/userService';
 import { useAuthStore } from '../store/authStore';
-
-// Blood draw hours: 7 AM to 6 PM, in 30-minute slots.
-const HOUR_OPTIONS = ['7 AM', '8 AM', '9 AM', '10 AM', '11 AM', '12 PM', '1 PM', '2 PM', '3 PM', '4 PM', '5 PM', '6 PM'];
-const MINUTE_OPTIONS = ['00', '30'];
-
-const OptionPickerModal = ({
-    visible,
-    title,
-    options,
-    selected,
-    onSelect,
-    onClose,
-}: {
-    visible: boolean;
-    title: string;
-    options: string[];
-    selected: string;
-    onSelect: (value: string) => void;
-    onClose: () => void;
-}) => (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-        <TouchableOpacity
-            activeOpacity={1}
-            onPress={onClose}
-            className="flex-1 bg-black/40 justify-center px-10"
-        >
-            <View className="bg-white rounded-2xl overflow-hidden max-h-[360px]">
-                <Text className="text-center font-semibold text-[#2F2F2F] py-3 border-b border-gray-100">
-                    {title}
-                </Text>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                    {options.map(option => (
-                        <TouchableOpacity
-                            key={option}
-                            onPress={() => {
-                                onSelect(option);
-                                onClose();
-                            }}
-                            className={`py-3 px-4 ${selected === option ? 'bg-[#4FB5B0]/10' : ''}`}
-                        >
-                            <Text
-                                className={`text-center text-base ${selected === option ? 'text-[#4FB5B0] font-semibold' : 'text-[#2F2F2F]'}`}
-                            >
-                                {option}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
-                </ScrollView>
-            </View>
-        </TouchableOpacity>
-    </Modal>
-);
-
-const formatSelectedDate = (dateString: string): string => {
-    // Parse Y/M/D as local-time components (not via `new Date(dateString)`,
-    // which parses as UTC and can display the wrong day in some timezones).
-    const [year, month, day] = dateString.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    return date.toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-    });
-};
 
 const isConsentMissingError = (err: any) => {
     const status = err?.response?.status;
@@ -84,10 +19,9 @@ const isConsentMissingError = (err: any) => {
     );
 };
 
-// Configure locale if needed (optional, keeping default for now)
 LocaleConfig.locales['en'] = {
   monthNames: [
-    'January', 'February', 'March', 'April', 'May', 'June', 
+    'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
   ],
   monthNamesShort: ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'],
@@ -97,6 +31,67 @@ LocaleConfig.locales['en'] = {
 };
 LocaleConfig.defaultLocale = 'en';
 
+// 7 AM to 6 PM, Monday–Sunday, 30-minute slots.
+const SLOT_START_MINUTES = 7 * 60;
+const SLOT_END_MINUTES = 18 * 60;
+const SLOT_DURATION_MINUTES = 30;
+
+const formatClock = (totalMinutes: number) => {
+    const hours24 = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const period = hours24 >= 12 ? 'PM' : 'AM';
+    const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+    return `${hours12}:${String(minutes).padStart(2, '0')} ${period}`;
+};
+
+type TimeSlot = {
+    id: string;
+    label: string;
+    value: string;
+    startMinutes: number;
+};
+
+const generateBloodDrawSlots = (): TimeSlot[] => {
+    const slots: TimeSlot[] = [];
+    for (
+        let start = SLOT_START_MINUTES;
+        start + SLOT_DURATION_MINUTES <= SLOT_END_MINUTES;
+        start += SLOT_DURATION_MINUTES
+    ) {
+        const end = start + SLOT_DURATION_MINUTES;
+        const startLabel = formatClock(start);
+        const endLabel = formatClock(end);
+        slots.push({
+            id: `${start}`,
+            label: `${startLabel} - ${endLabel}`,
+            value: `${startLabel} - ${endLabel}`,
+            startMinutes: start,
+        });
+    }
+    return slots;
+};
+
+const ALL_SLOTS = generateBloodDrawSlots();
+
+const getTodayString = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+};
+
+const formatSelectedDate = (dateString: string): string => {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    return date.toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+    });
+};
+
 export const SchedulePickupScreen = () => {
     const navigation = useNavigation();
     const [selectedDate, setSelectedDate] = useState('');
@@ -104,18 +99,6 @@ export const SchedulePickupScreen = () => {
     const [address, setAddress] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    const [selectedHour, setSelectedHour] = useState('');
-    const [selectedMinute, setSelectedMinute] = useState('');
-    const [hourPickerOpen, setHourPickerOpen] = useState(false);
-    const [minutePickerOpen, setMinutePickerOpen] = useState(false);
-
-    const updateTime = (hour: string, minute: string) => {
-        if (!hour || !minute) return;
-        const [num, meridiem] = hour.split(' ');
-        setTime(`${num}:${minute} ${meridiem}`);
-    };
-
-    // Custom Alert State
     const [alertConfig, setAlertConfig] = useState<{
         visible: boolean;
         title: string;
@@ -134,7 +117,6 @@ export const SchedulePickupScreen = () => {
 
     const hideAlert = () => {
         setAlertConfig(prev => ({ ...prev, visible: false }));
-        // If success, go back after closing alert
         if (alertConfig.type === 'success') {
             navigation.goBack();
         }
@@ -142,19 +124,32 @@ export const SchedulePickupScreen = () => {
 
     const onDayPress = (day: DateData) => {
         setSelectedDate(day.dateString);
+        setTime('');
     };
+
+    const availableSlots = useMemo(() => {
+        if (!selectedDate) {
+            return ALL_SLOTS;
+        }
+        const today = getTodayString();
+        if (selectedDate !== today) {
+            return ALL_SLOTS;
+        }
+        const now = new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        return ALL_SLOTS.filter(slot => slot.startMinutes > nowMinutes);
+    }, [selectedDate]);
 
     const handleConfirm = async () => {
         if (!selectedDate || !time.trim() || !address.trim()) {
             showAlert("Missing Details", "Please fill in all fields (Date, Time, Address).", 'error');
             return;
         }
-        
+
         setIsLoading(true);
         try {
             await userService.schedulePickup(selectedDate, time, address);
-            
-            // Refetch profile to get updated status from server
+
             try {
                 const profileResponse = await userService.getProfile();
                 const freshUser = profileResponse.data || profileResponse;
@@ -168,7 +163,6 @@ export const SchedulePickupScreen = () => {
                     return;
                 }
                 console.error("Failed to refresh profile after scheduling", err);
-                 // Fallback: update locally if fetch fails
                  const user = useAuthStore.getState().user;
                  if (user) {
                      useAuthStore.getState().setUser({ ...user, can_schedule_appointment: false });
@@ -177,26 +171,25 @@ export const SchedulePickupScreen = () => {
 
             showAlert("Blood Draw Scheduled", `Blood draw scheduled for ${selectedDate} at ${time}. Our team will contact you shortly.`, 'success');
         } catch (error: any) {
-            console.error("Pickup scheduling failed", error);
+            console.error("Blood draw scheduling failed", error);
             showAlert("Error", error.response?.data?.message || "Failed to schedule blood draw. Please try again.", 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayString();
 
     return (
         <ScreenWrapper className="flex-1 bg-[#FFFBE6]">
-            <KeyboardAwareScrollView 
+            <KeyboardAwareScrollView
                 contentContainerStyle={{ flexGrow: 1 }}
                 enableOnAndroid={true}
                 extraScrollHeight={20}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Header */}
                 <View className="flex-row items-center px-6 py-4">
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         onPress={() => navigation.goBack()}
                         className="p-2 -ml-2 rounded-full active:bg-gray-100"
                     >
@@ -205,35 +198,22 @@ export const SchedulePickupScreen = () => {
                     <Text className="text-xl font-bold text-[#2F2F2F] ml-2">Schedule Blood Draw</Text>
                 </View>
 
-                {/* Content */}
                 <View className="flex-1 px-6 pt-4 pb-10">
                     <Text className="text-base text-gray-600 mb-6 text-center">
-                        Please select a preferred date for your blood draw.
+                        Please select a date and a 30-minute slot (7:00 AM – 6:00 PM, Monday to Sunday).
                     </Text>
 
                     <View className="bg-white rounded-2xl shadow-sm overflow-hidden p-4">
                         <Calendar
-                            // Initially visible month. Default = Date()
                             current={today}
-                            // Minimum date that can be selected, dates before minDate will be grayed out. Default = undefined
                             minDate={today}
-                            // Handler which gets executed on day press. Default = undefined
                             onDayPress={onDayPress}
-                            // Month format in calendar title. Formatting values: http://arshaw.com/xdate/#Formatting
                             monthFormat={'MMMM yyyy'}
-                            // Hide month navigation arrows. Default = false
                             hideArrows={false}
-                            // Do not show days of other months in month page. Default = false
                             hideExtraDays={true}
-                            // If hideArrows = false and hideExtraDays = false do not switch month when tapping on greyed out
-                            // day from another month that is visible in calendar page. Default = false
                             disableMonthChange={true}
-                            // If firstDay=1 week starts from Monday. Note that dayNames and dayNamesShort should still start from Sunday
                             firstDay={1}
-                            // Enable the option to swipe between months. Default = false
                             enableSwipeMonths={true}
-                            
-                            // Styling
                             theme={{
                                 backgroundColor: '#ffffff',
                                 calendarBackground: '#ffffff',
@@ -249,7 +229,7 @@ export const SchedulePickupScreen = () => {
                                 disabledArrowColor: '#d9e1e8',
                                 monthTextColor: '#2F2F2F',
                                 indicatorColor: '#4FB5B0',
-                                textDayFontFamily: 'System', // Use default system fonts
+                                textDayFontFamily: 'System',
                                 textMonthFontFamily: 'System',
                                 textDayHeaderFontFamily: 'System',
                                 textDayFontWeight: '400',
@@ -271,55 +251,35 @@ export const SchedulePickupScreen = () => {
                         </Text>
                     ) : null}
 
-                    {/* Time Input (Hour + Minute dropdowns, 7 AM - 6 PM, 30-min slots) */}
                     <View className="mt-8 mb-4">
-                        <Text className="text-gray-700 font-medium mb-2">Preferred Time</Text>
-                        <View className="flex-row gap-3">
-                            <TouchableOpacity
-                                onPress={() => setHourPickerOpen(true)}
-                                className="flex-1 bg-white p-4 rounded-xl shadow-sm flex-row items-center justify-between"
-                            >
-                                <Text className={selectedHour ? "text-[#2F2F2F]" : "text-[#9CA3AF]"}>
-                                    {selectedHour || "Hour"}
-                                </Text>
-                                <ChevronDown size={18} color="#6B7280" />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => setMinutePickerOpen(true)}
-                                className="flex-1 bg-white p-4 rounded-xl shadow-sm flex-row items-center justify-between"
-                            >
-                                <Text className={selectedMinute !== '' ? "text-[#2F2F2F]" : "text-[#9CA3AF]"}>
-                                    {selectedMinute !== '' ? `:${selectedMinute}` : "Minute"}
-                                </Text>
-                                <ChevronDown size={18} color="#6B7280" />
-                            </TouchableOpacity>
-                        </View>
-
-                        <OptionPickerModal
-                            visible={hourPickerOpen}
-                            title="Select Hour"
-                            options={HOUR_OPTIONS}
-                            selected={selectedHour}
-                            onSelect={hour => {
-                                setSelectedHour(hour);
-                                updateTime(hour, selectedMinute);
-                            }}
-                            onClose={() => setHourPickerOpen(false)}
-                        />
-                        <OptionPickerModal
-                            visible={minutePickerOpen}
-                            title="Select Minute"
-                            options={MINUTE_OPTIONS}
-                            selected={selectedMinute}
-                            onSelect={minute => {
-                                setSelectedMinute(minute);
-                                updateTime(selectedHour, minute);
-                            }}
-                            onClose={() => setMinutePickerOpen(false)}
-                        />
+                        <Text className="text-gray-700 font-medium mb-2">Preferred Time Slot</Text>
+                        {!selectedDate ? (
+                            <Text className="text-gray-400 text-sm">Select a date to see 30-minute slots.</Text>
+                        ) : availableSlots.length === 0 ? (
+                            <Text className="text-gray-500 text-sm">No remaining slots today. Please choose another date.</Text>
+                        ) : (
+                            <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                                {availableSlots.map(slot => {
+                                    const selected = time === slot.value;
+                                    return (
+                                        <TouchableOpacity
+                                            key={slot.id}
+                                            onPress={() => setTime(slot.value)}
+                                            className={`px-3 py-2.5 rounded-xl ${selected ? 'bg-[#4FB5B0]' : 'bg-white'}`}
+                                            style={{ width: '48%' }}
+                                        >
+                                            <Text
+                                                className={`text-center text-sm font-medium ${selected ? 'text-white' : 'text-[#2F2F2F]'}`}
+                                            >
+                                                {slot.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                        )}
                     </View>
 
-                    {/* Address Input */}
                     <View className="mb-6">
                         <Text className="text-gray-700 font-medium mb-2">Blood Draw Address</Text>
                         <TextInput
@@ -333,7 +293,6 @@ export const SchedulePickupScreen = () => {
                         />
                     </View>
 
-                    {/* Action Button */}
                     <View className="mt-2 mb-10">
                          <TouchableOpacity
                             onPress={handleConfirm}
@@ -348,7 +307,7 @@ export const SchedulePickupScreen = () => {
                         </TouchableOpacity>
                     </View>
 
-                    <CustomAlert 
+                    <CustomAlert
                         visible={alertConfig.visible}
                         title={alertConfig.title}
                         message={alertConfig.message}

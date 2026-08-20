@@ -307,7 +307,7 @@ const MAX_REPORT_TEXT_CHARS = 100000;
 // Every message resends the whole conversation including these attachments,
 // so keeping this low is what keeps replies fast. All reports still
 // contribute their text content (see textSections) regardless of this cap.
-const MAX_FILE_ATTACHMENTS = 1;
+const MAX_FILE_ATTACHMENTS = 2;
 
 function getMimeTypeFromName(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -569,12 +569,18 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       reportTextRef.current = null;
       const textSections: string[] = [];
 
-      // 2. Only give the AI the most recent report (reports[0] — the user
-      // can still see and browse every report elsewhere in the app; this
-      // just keeps what's sent to FlahyAI small and fast).
-      for (const reportMeta of reports.slice(0, 1)) {
+      // Load up to 2 reports per person (backend now returns both).
+      for (const reportMeta of reports.slice(0, 2)) {
+        const personName = [reportMeta.first_name, reportMeta.middle_name, reportMeta.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
         const fileName: string =
-          reportMeta.file_name || `report-${reportMeta.id}`;
+          reportMeta.file_name ||
+          (personName ? `${personName} report` : `report-${reportMeta.id}`);
+        const reportLabel = personName
+          ? `${fileName} (${personName})`
+          : fileName;
         try {
           const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${reportMeta.id}`;
           const downloadResponse = await ReactNativeBlobUtil.fetch(
@@ -643,11 +649,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             // failed outright (a converted report PDF alone measured ~5MB,
             // likely exceeding the backend's request size limit).
             const plain = htmlToPlainText(textContent);
-            if (plain) textSections.push(`--- Report: ${fileName} ---\n${plain}`);
+            if (plain) textSections.push(`--- Report: ${reportLabel} ---\n${plain}`);
           } else if (effectiveCT === 'application/json' && textContent) {
             const formatted = jsonToReportText(textContent);
             if (formatted)
-              textSections.push(`--- Report: ${fileName} ---\n${formatted}`);
+              textSections.push(`--- Report: ${reportLabel} ---\n${formatted}`);
           } else if (
             effectiveCT === 'application/pdf' ||
             effectiveCT.startsWith('image/')
@@ -662,14 +668,14 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               // Over the attachment cap and there's no text form of this
               // report — at least tell the AI it exists by name.
               textSections.push(
-                `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+                `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
               );
             }
           } else if (textContent) {
             // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
             const trimmed = textContent.trim().slice(0, MAX_REPORT_TEXT_CHARS);
             if (trimmed)
-              textSections.push(`--- Report: ${fileName} ---\n${trimmed}`);
+              textSections.push(`--- Report: ${reportLabel} ---\n${trimmed}`);
           } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
             // Unknown binary — fall back to filename-based MIME as a best guess.
             reportFilesRef.current.push({
@@ -679,7 +685,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             });
           } else {
             textSections.push(
-              `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+              `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
             );
           }
         } catch (err: any) {
