@@ -1,8 +1,9 @@
 import { useNavigation } from '@react-navigation/native';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, Clock } from 'lucide-react-native';
 import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Calendar, DateData, LocaleConfig } from 'react-native-calendars';
+import DatePicker from 'react-native-date-picker';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { CustomAlert } from '../components/CustomAlert';
 import { ScreenWrapper } from '../components/ScreenWrapper';
@@ -35,6 +36,7 @@ LocaleConfig.defaultLocale = 'en';
 const SLOT_START_MINUTES = 7 * 60;
 const SLOT_END_MINUTES = 18 * 60;
 const SLOT_DURATION_MINUTES = 30;
+const LAST_START_MINUTES = SLOT_END_MINUTES - SLOT_DURATION_MINUTES; // 5:30 PM
 
 const formatClock = (totalMinutes: number) => {
     const hours24 = Math.floor(totalMinutes / 60);
@@ -43,35 +45,6 @@ const formatClock = (totalMinutes: number) => {
     const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
     return `${hours12}:${String(minutes).padStart(2, '0')} ${period}`;
 };
-
-type TimeSlot = {
-    id: string;
-    label: string;
-    value: string;
-    startMinutes: number;
-};
-
-const generateBloodDrawSlots = (): TimeSlot[] => {
-    const slots: TimeSlot[] = [];
-    for (
-        let start = SLOT_START_MINUTES;
-        start + SLOT_DURATION_MINUTES <= SLOT_END_MINUTES;
-        start += SLOT_DURATION_MINUTES
-    ) {
-        const end = start + SLOT_DURATION_MINUTES;
-        const startLabel = formatClock(start);
-        const endLabel = formatClock(end);
-        slots.push({
-            id: `${start}`,
-            label: `${startLabel} - ${endLabel}`,
-            value: `${startLabel} - ${endLabel}`,
-            startMinutes: start,
-        });
-    }
-    return slots;
-};
-
-const ALL_SLOTS = generateBloodDrawSlots();
 
 const getTodayString = () => {
     const now = new Date();
@@ -92,12 +65,49 @@ const formatSelectedDate = (dateString: string): string => {
     });
 };
 
+const parseDateString = (dateString: string) => {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Date(year, month - 1, day);
+};
+
+const dateWithMinutes = (base: Date, totalMinutes: number) => {
+    const d = new Date(base);
+    d.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
+    return d;
+};
+
+/** Next valid 30-min start after "now" (exclusive of current partial slot). */
+const nextHalfHourStartMinutes = (now: Date) => {
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    return Math.ceil((minutes + 1) / SLOT_DURATION_MINUTES) * SLOT_DURATION_MINUTES;
+};
+
+const getSelectableStartRange = (selectedDate: string) => {
+    let minStart = SLOT_START_MINUTES;
+    if (selectedDate === getTodayString()) {
+        minStart = Math.max(SLOT_START_MINUTES, nextHalfHourStartMinutes(new Date()));
+    }
+    return {
+        minStart,
+        maxStart: LAST_START_MINUTES,
+        hasSlots: minStart <= LAST_START_MINUTES,
+    };
+};
+
+const toSlotValue = (date: Date) => {
+    const startMinutes = date.getHours() * 60 + date.getMinutes();
+    const endMinutes = startMinutes + SLOT_DURATION_MINUTES;
+    return `${formatClock(startMinutes)} - ${formatClock(endMinutes)}`;
+};
+
 export const SchedulePickupScreen = () => {
     const navigation = useNavigation();
     const [selectedDate, setSelectedDate] = useState('');
     const [time, setTime] = useState('');
     const [address, setAddress] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [pickerDate, setPickerDate] = useState(() => dateWithMinutes(new Date(), 9 * 60));
+    const [open, setOpen] = useState(false);
 
     const [alertConfig, setAlertConfig] = useState<{
         visible: boolean;
@@ -122,23 +132,56 @@ export const SchedulePickupScreen = () => {
         }
     };
 
+    const timeBounds = useMemo(() => {
+        if (!selectedDate) {
+            return null;
+        }
+        const base = parseDateString(selectedDate);
+        const { minStart, maxStart, hasSlots } = getSelectableStartRange(selectedDate);
+        return {
+            hasSlots,
+            minimumDate: dateWithMinutes(base, minStart),
+            maximumDate: dateWithMinutes(base, maxStart),
+            defaultDate: dateWithMinutes(base, Math.min(Math.max(minStart, 9 * 60), maxStart)),
+        };
+    }, [selectedDate]);
+
     const onDayPress = (day: DateData) => {
         setSelectedDate(day.dateString);
         setTime('');
     };
 
-    const availableSlots = useMemo(() => {
+    const openTimePicker = () => {
         if (!selectedDate) {
-            return ALL_SLOTS;
+            showAlert('Select Date', 'Please select a date first.', 'info');
+            return;
         }
-        const today = getTodayString();
-        if (selectedDate !== today) {
-            return ALL_SLOTS;
+        if (!timeBounds?.hasSlots) {
+            showAlert(
+                'No Slots Available',
+                'No remaining time slots today. Please choose another date.',
+                'info',
+            );
+            return;
         }
-        const now = new Date();
-        const nowMinutes = now.getHours() * 60 + now.getMinutes();
-        return ALL_SLOTS.filter(slot => slot.startMinutes > nowMinutes);
-    }, [selectedDate]);
+
+        // Keep current selection if still valid; otherwise start inside the allowed window.
+        const currentMinutes = pickerDate.getHours() * 60 + pickerDate.getMinutes();
+        const minM = timeBounds.minimumDate.getHours() * 60 + timeBounds.minimumDate.getMinutes();
+        const maxM = timeBounds.maximumDate.getHours() * 60 + timeBounds.maximumDate.getMinutes();
+        if (currentMinutes < minM || currentMinutes > maxM) {
+            setPickerDate(timeBounds.defaultDate);
+        } else {
+            setPickerDate(dateWithMinutes(parseDateString(selectedDate), currentMinutes));
+        }
+        setOpen(true);
+    };
+
+    const handleTimeConfirm = (date: Date) => {
+        setOpen(false);
+        setPickerDate(date);
+        setTime(toSlotValue(date));
+    };
 
     const handleConfirm = async () => {
         if (!selectedDate || !time.trim() || !address.trim()) {
@@ -253,31 +296,29 @@ export const SchedulePickupScreen = () => {
 
                     <View className="mt-8 mb-4">
                         <Text className="text-gray-700 font-medium mb-2">Preferred Time Slot</Text>
-                        {!selectedDate ? (
-                            <Text className="text-gray-400 text-sm">Select a date to see 30-minute slots.</Text>
-                        ) : availableSlots.length === 0 ? (
-                            <Text className="text-gray-500 text-sm">No remaining slots today. Please choose another date.</Text>
-                        ) : (
-                            <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                                {availableSlots.map(slot => {
-                                    const selected = time === slot.value;
-                                    return (
-                                        <TouchableOpacity
-                                            key={slot.id}
-                                            onPress={() => setTime(slot.value)}
-                                            className={`px-3 py-2.5 rounded-xl ${selected ? 'bg-[#4FB5B0]' : 'bg-white'}`}
-                                            style={{ width: '48%' }}
-                                        >
-                                            <Text
-                                                className={`text-center text-sm font-medium ${selected ? 'text-white' : 'text-[#2F2F2F]'}`}
-                                            >
-                                                {slot.label}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-                        )}
+                        <TouchableOpacity
+                            onPress={openTimePicker}
+                            className="bg-white p-4 rounded-xl shadow-sm flex-row items-center justify-between"
+                        >
+                            <Text className={time ? 'text-[#2F2F2F]' : 'text-[#9CA3AF]'}>
+                                {time || 'e.g. 10:00 AM - 10:30 AM'}
+                            </Text>
+                            <Clock size={20} color="#6B7280" />
+                        </TouchableOpacity>
+
+                        {timeBounds ? (
+                            <DatePicker
+                                modal
+                                open={open}
+                                date={pickerDate}
+                                mode="time"
+                                minuteInterval={30}
+                                minimumDate={timeBounds.minimumDate}
+                                maximumDate={timeBounds.maximumDate}
+                                onConfirm={handleTimeConfirm}
+                                onCancel={() => setOpen(false)}
+                            />
+                        ) : null}
                     </View>
 
                     <View className="mb-6">
