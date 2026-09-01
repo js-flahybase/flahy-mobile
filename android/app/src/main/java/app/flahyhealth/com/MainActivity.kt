@@ -1,4 +1,4 @@
-package com.flahy
+package app.flahyhealth.com
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
