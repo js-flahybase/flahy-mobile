@@ -47,7 +47,14 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                 uri: file.report_url,
                 originalUri: `https://api.flahyhealth.com/api/report/download-report/${file.id || file.report_id}`
             }));
-            setReports(mapped);
+            // Show HTML reports first, then everything else (PDFs, etc.),
+            // keeping each group's original order.
+            const isHtml = (r: ReportFile) => r.type === 'html' || r.type === 'htm';
+            const sorted = [...mapped].sort((a, b) => {
+                if (isHtml(a) === isHtml(b)) return 0;
+                return isHtml(a) ? -1 : 1;
+            });
+            setReports(sorted);
         } catch (error) {
             console.error("Failed to fetch reports", error);
         } finally {

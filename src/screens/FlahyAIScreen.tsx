@@ -23,7 +23,6 @@ import {
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { Header } from '../components/Header';
-import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { API_BASE_URL, patientApiRoutes, WEB_APP_URL } from '../config';
 import { RootStackParamList } from '../navigation/types';
@@ -569,10 +568,16 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       reportTextRef.current = null;
       const textSections: string[] = [];
 
-      // 2. Only give the AI the most recent report (reports[0] — the user
-      // can still see and browse every report elsewhere in the app; this
-      // just keeps what's sent to FlahyAI small and fast).
-      for (const reportMeta of reports.slice(0, 1)) {
+      // 2. Only give the AI one report (the user can still see and browse
+      // every report elsewhere in the app). Go through the list newest-first
+      // and use the first one whose actual content is HTML (its full text is
+      // extracted for the AI). File names can't be trusted for this, so the
+      // downloaded content is checked. If none is HTML, fall back to the
+      // newest report of any type.
+      let usedHtml = false;
+      let applyFallback: (() => void) | null = null;
+      for (let i = 0; i < reports.length && !usedHtml; i++) {
+        const reportMeta = reports[i];
         const fileName: string =
           reportMeta.file_name || `report-${reportMeta.id}`;
         try {
@@ -634,53 +639,63 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               effectiveCT = 'application/json';
           }
 
-          if (effectiveCT === 'text/html' && textContent) {
-            // Expose the report as REPORT_TEXT — this captures the full text
-            // content of the report. We deliberately do NOT also attach a
-            // converted PDF here: it's redundant with the text above (same
-            // content, no extra info the AI doesn't already have) and was
-            // the single biggest contributor to oversized chat requests that
-            // failed outright (a converted report PDF alone measured ~5MB,
-            // likely exceeding the backend's request size limit).
-            const plain = htmlToPlainText(textContent);
-            if (plain) textSections.push(`--- Report: ${fileName} ---\n${plain}`);
-          } else if (effectiveCT === 'application/json' && textContent) {
-            const formatted = jsonToReportText(textContent);
-            if (formatted)
-              textSections.push(`--- Report: ${fileName} ---\n${formatted}`);
-          } else if (
-            effectiveCT === 'application/pdf' ||
-            effectiveCT.startsWith('image/')
-          ) {
-            if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+          const applyReport = () => {
+            if (effectiveCT === 'text/html' && textContent) {
+              // Expose the report as REPORT_TEXT — this captures the full
+              // text content of the report. No converted PDF is attached: it
+              // would duplicate the text and made chat requests too large.
+              const plain = htmlToPlainText(textContent);
+              if (plain)
+                textSections.push(`--- Report: ${fileName} ---\n${plain}`);
+            } else if (effectiveCT === 'application/json' && textContent) {
+              const formatted = jsonToReportText(textContent);
+              if (formatted)
+                textSections.push(`--- Report: ${fileName} ---\n${formatted}`);
+            } else if (
+              effectiveCT === 'application/pdf' ||
+              effectiveCT.startsWith('image/')
+            ) {
+              if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+                reportFilesRef.current.push({
+                  base64: downloadResponse.base64(),
+                  mediaType: effectiveCT,
+                  filename: fileName,
+                });
+              } else {
+                // Over the attachment cap and there's no text form of this
+                // report — at least tell the AI it exists by name.
+                textSections.push(
+                  `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+                );
+              }
+            } else if (textContent) {
+              // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
+              const trimmed = textContent
+                .trim()
+                .slice(0, MAX_REPORT_TEXT_CHARS);
+              if (trimmed)
+                textSections.push(`--- Report: ${fileName} ---\n${trimmed}`);
+            } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+              // Unknown binary — fall back to filename-based MIME as a best guess.
               reportFilesRef.current.push({
                 base64: downloadResponse.base64(),
-                mediaType: effectiveCT,
+                mediaType: nameCT,
                 filename: fileName,
               });
             } else {
-              // Over the attachment cap and there's no text form of this
-              // report — at least tell the AI it exists by name.
               textSections.push(
                 `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
               );
             }
-          } else if (textContent) {
-            // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
-            const trimmed = textContent.trim().slice(0, MAX_REPORT_TEXT_CHARS);
-            if (trimmed)
-              textSections.push(`--- Report: ${fileName} ---\n${trimmed}`);
-          } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
-            // Unknown binary — fall back to filename-based MIME as a best guess.
-            reportFilesRef.current.push({
-              base64: downloadResponse.base64(),
-              mediaType: nameCT,
-              filename: fileName,
-            });
-          } else {
-            textSections.push(
-              `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
-            );
+          };
+
+          if (effectiveCT === 'text/html' && textContent) {
+            applyReport();
+            usedHtml = true;
+          } else if (i === 0) {
+            // Newest report isn't HTML: keep it as the fallback in case no
+            // HTML report turns up further down the list.
+            applyFallback = applyReport;
           }
         } catch (err: any) {
           console.error(
@@ -690,11 +705,16 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         }
       }
 
+      if (!usedHtml && applyFallback) {
+        (applyFallback as () => void)();
+      }
+
       if (textSections.length > 0) {
         reportTextRef.current = textSections.join('\n\n');
       }
 
       console.log('[FlahyAI] reports loaded:', {
+        usedHtml,
         reportCount: reports.length,
         filesAttached: reportFilesRef.current.length,
         hasText: !!reportTextRef.current,
@@ -1594,7 +1614,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               keyboardHeight > 0 && { paddingBottom: keyboardHeight },
             ]}
           >
-            <MedicalDisclaimer variant="short" className="mx-4 mb-2" />
             {pendingAttachment && (
               <View style={inputStyles.attachmentPreviewRow}>
                 <Image
