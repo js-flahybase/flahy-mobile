@@ -525,7 +525,7 @@ export const DashboardScreen = () => {
         {/* Action Hero Section */}
         {/* Action Hero Section */}
         <View className="bg-[#E2F1E6] rounded-t-[40px] px-6 pt-8 pb-10 -mb-10 min-h-[500px]">
-          {/* Schedule Pick-up Button - Only show if user can schedule */}
+          {/* Schedule Blood Draw — only when the user can still book */}
           {user?.can_schedule_appointment !== false && (
             <TouchableOpacity
               onPress={() => navigation.navigate('SchedulePickup')}
@@ -537,7 +537,6 @@ export const DashboardScreen = () => {
               </Text>
             </TouchableOpacity>
           )}
-
           {/* Download Report Button — only shown when user has a report */}
           {hasReport && (
             <TouchableOpacity
@@ -546,7 +545,7 @@ export const DashboardScreen = () => {
             >
               <FileText size={20} color="white" />
               <Text className="ml-2 text-base font-semibold text-white">
-                View Your Flahy Report
+                View Your Flahy Reports
               </Text>
             </TouchableOpacity>
           )}

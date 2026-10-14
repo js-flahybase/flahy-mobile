@@ -14,6 +14,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+#if DEBUG
+    // Default Metro (8081) is often already used by another RN app on this machine.
+    // Pin Flahy to 8088 so we never load a foreign JS bundle (PlatformConstants crash).
+    RCTBundleURLProvider.sharedSettings().jsLocation = "localhost:8088"
+#endif
     let delegate = ReactNativeDelegate()
     let factory = RCTReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()

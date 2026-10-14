@@ -306,7 +306,7 @@ const MAX_REPORT_TEXT_CHARS = 100000;
 // Every message resends the whole conversation including these attachments,
 // so keeping this low is what keeps replies fast. All reports still
 // contribute their text content (see textSections) regardless of this cap.
-const MAX_FILE_ATTACHMENTS = 1;
+const MAX_FILE_ATTACHMENTS = 2;
 
 function getMimeTypeFromName(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -568,18 +568,42 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       reportTextRef.current = null;
       const textSections: string[] = [];
 
-      // 2. Only give the AI one report (the user can still see and browse
-      // every report elsewhere in the app). Go through the list newest-first
-      // and use the first one whose actual content is HTML (its full text is
-      // extracted for the AI). File names can't be trusted for this, so the
-      // downloaded content is checked. If none is HTML, fall back to the
-      // newest report of any type.
-      let usedHtml = false;
+      // Group reports by person (backend may return multiple people's
+      // reports, e.g. a family account). For each of up to 2 people, prefer
+      // their HTML report if they have one — its full text is extracted for
+      // the AI — and only fall back to their newest report of any other
+      // type if none of their reports are HTML. File names can't be trusted
+      // to tell HTML apart from PDF, so the downloaded content is checked.
+      const personKey = (r: any) =>
+        [r.first_name, r.middle_name, r.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
+      const personOrder: string[] = [];
+      const personGroups = new Map<string, any[]>();
+      for (const r of reports) {
+        const key = personKey(r) || `_report_${r.id}`;
+        if (!personGroups.has(key)) {
+          personOrder.push(key);
+          personGroups.set(key, []);
+        }
+        personGroups.get(key)!.push(r);
+      }
+
+      for (const key of personOrder.slice(0, 2)) {
+      const personReports = personGroups.get(key)!;
+      let usedHtmlForPerson = false;
       let applyFallback: (() => void) | null = null;
-      for (let i = 0; i < reports.length && !usedHtml; i++) {
-        const reportMeta = reports[i];
+      for (let i = 0; i < personReports.length && !usedHtmlForPerson; i++) {
+        const reportMeta = personReports[i];
+        const personName = personKey(reportMeta);
         const fileName: string =
-          reportMeta.file_name || `report-${reportMeta.id}`;
+          reportMeta.file_name ||
+          (personName ? `${personName} report` : `report-${reportMeta.id}`);
+        const reportLabel = personName
+          ? `${fileName} (${personName})`
+          : fileName;
         try {
           const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${reportMeta.id}`;
           const downloadResponse = await ReactNativeBlobUtil.fetch(
@@ -642,15 +666,22 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
           const applyReport = () => {
             if (effectiveCT === 'text/html' && textContent) {
               // Expose the report as REPORT_TEXT — this captures the full
-              // text content of the report. No converted PDF is attached: it
-              // would duplicate the text and made chat requests too large.
+              // text content of the report. We deliberately do NOT also
+              // attach a converted PDF here: it's redundant with the text
+              // above (same content, no extra info the AI doesn't already
+              // have) and was the single biggest contributor to oversized
+              // chat requests that failed outright (a converted report PDF
+              // alone measured ~5MB, likely exceeding the backend's request
+              // size limit).
               const plain = htmlToPlainText(textContent);
               if (plain)
-                textSections.push(`--- Report: ${fileName} ---\n${plain}`);
+                textSections.push(`--- Report: ${reportLabel} ---\n${plain}`);
             } else if (effectiveCT === 'application/json' && textContent) {
               const formatted = jsonToReportText(textContent);
               if (formatted)
-                textSections.push(`--- Report: ${fileName} ---\n${formatted}`);
+                textSections.push(
+                  `--- Report: ${reportLabel} ---\n${formatted}`,
+                );
             } else if (
               effectiveCT === 'application/pdf' ||
               effectiveCT.startsWith('image/')
@@ -665,7 +696,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 // Over the attachment cap and there's no text form of this
                 // report — at least tell the AI it exists by name.
                 textSections.push(
-                  `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+                  `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
                 );
               }
             } else if (textContent) {
@@ -674,7 +705,9 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 .trim()
                 .slice(0, MAX_REPORT_TEXT_CHARS);
               if (trimmed)
-                textSections.push(`--- Report: ${fileName} ---\n${trimmed}`);
+                textSections.push(
+                  `--- Report: ${reportLabel} ---\n${trimmed}`,
+                );
             } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
               // Unknown binary — fall back to filename-based MIME as a best guess.
               reportFilesRef.current.push({
@@ -684,17 +717,17 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               });
             } else {
               textSections.push(
-                `--- Report: ${fileName} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+                `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
               );
             }
           };
 
           if (effectiveCT === 'text/html' && textContent) {
             applyReport();
-            usedHtml = true;
+            usedHtmlForPerson = true;
           } else if (i === 0) {
-            // Newest report isn't HTML: keep it as the fallback in case no
-            // HTML report turns up further down the list.
+            // Newest report for this person isn't HTML: keep it as the
+            // fallback in case none of their other reports are HTML either.
             applyFallback = applyReport;
           }
         } catch (err: any) {
@@ -705,8 +738,9 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         }
       }
 
-      if (!usedHtml && applyFallback) {
+      if (!usedHtmlForPerson && applyFallback) {
         (applyFallback as () => void)();
+      }
       }
 
       if (textSections.length > 0) {
@@ -714,7 +748,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       }
 
       console.log('[FlahyAI] reports loaded:', {
-        usedHtml,
+        peopleCount: personOrder.slice(0, 2).length,
         reportCount: reports.length,
         filesAttached: reportFilesRef.current.length,
         hasText: !!reportTextRef.current,
