@@ -2,7 +2,6 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
-import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -14,6 +13,7 @@ type ReportsScreenProps = NativeStackScreenProps<RootStackParamList, 'Reports'>;
 interface ReportFile {
     id: string;
     name: string;
+    personName: string;
     submitted: string;
     size: string;
     type: string;
@@ -21,6 +21,35 @@ interface ReportFile {
     uri: string;
     originalUri: string;
 }
+
+const formatPersonName = (file: any) => {
+    return [file.first_name, file.middle_name, file.last_name]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+};
+
+const reportKind = (file: any, fileName?: string) => {
+    const hint = String(
+        file.file_type ||
+        file.mime_type ||
+        file.content_type ||
+        file.extname ||
+        fileName ||
+        file.report_url ||
+        '',
+    ).toLowerCase();
+    if (hint.includes('html') || hint.endsWith('.htm')) return 'html';
+    if (hint.includes('pdf')) return 'pdf';
+    const ext = (fileName || '').split('.').pop()?.toLowerCase();
+    return ext || 'doc';
+};
+
+const reportSortRank = (type: string) => {
+    if (type === 'html' || type === 'htm') return 0;
+    if (type === 'pdf') return 1;
+    return 2;
+};
 
 export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
     const [reports, setReports] = useState<ReportFile[]>([]);
@@ -37,17 +66,29 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
             const response = await userService.getReports();
             // Assuming the same endpoint serves all user files. 
             // We map them to the report structure.
-            const mapped: ReportFile[] = (response.data || []).map((file: any) => ({
-                id: file.id || String(Math.random()),
-                name: file.file_name || 'Unknown File',
-                submitted: file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Unknown',
-                size: '0 KB', // API missing size
-                type: file.file_name?.split('.').pop() || 'doc',
-                description: file.description || 'No description available for this file.',
-                uri: file.report_url,
-                originalUri: `https://api.flahyhealth.com/api/report/download-report/${file.id || file.report_id}`
-            }));
-            setReports(mapped);
+            const list = Array.isArray(response)
+                ? response
+                : response.data || response.reports || [];
+            const mapped: ReportFile[] = list.map((file: any, index: number) => {
+                const personName = formatPersonName(file);
+                const fileName = file.file_name || file.name;
+                return {
+                    id: file.id || file.report_id || String(index),
+                    name: fileName || (personName ? `${personName} Report` : `Flahy Report ${index + 1}`),
+                    personName,
+                    submitted: file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Unknown',
+                    size: '0 KB',
+                    type: reportKind(file, fileName),
+                    description: file.description || 'No description available for this file.',
+                    uri: file.report_url,
+                    originalUri: `https://api.flahyhealth.com/api/report/download-report/${file.id || file.report_id}`
+                };
+            });
+            // HTML first, then PDF. Stable sort keeps the original order inside each group.
+            const sorted = [...mapped].sort(
+                (a, b) => reportSortRank(a.type) - reportSortRank(b.type),
+            );
+            setReports(sorted);
         } catch (error) {
             console.error("Failed to fetch reports", error);
         } finally {
@@ -148,8 +189,13 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                          {/* Circle Icon Placeholder */}
                     </View>
                     <View className="flex-1">
-                        <Text className="text-text-primary font-bold text-base" numberOfLines={1}>{item.name}</Text>
-                        <Text className="text-text-secondary text-xs mt-0.5">Submitted: {item.submitted}</Text>
+                        <Text className="text-text-primary font-bold text-base" numberOfLines={1}>
+                            {item.personName || item.name}
+                        </Text>
+                        <Text className="text-text-secondary text-xs mt-0.5">
+                            {item.personName && item.name !== item.personName ? `${item.name} · ` : ''}
+                            Submitted: {item.submitted}
+                        </Text>
                     </View>
                     {/* {isExpanded ? (
                         <ChevronDown size={20} color={colors['text-secondary']} />
@@ -199,7 +245,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                     
                     {/* Header */}
                     <View className="px-6 py-6 flex-row items-center justify-between">
-                        <Text className="text-2xl font-bold text-text-primary">Your Flahy Reports</Text>
+                        <Text className="text-2xl font-bold text-text-primary">Your Flahy Results</Text>
                         <TouchableOpacity 
                             onPress={() => navigation.goBack()}
                             className="p-2"
@@ -219,9 +265,6 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                             keyExtractor={item => item.id}
                             contentContainerStyle={{ padding: 24, paddingTop: 0, paddingBottom: 20 }}
                             showsVerticalScrollIndicator={false}
-                            ListHeaderComponent={
-                                <MedicalDisclaimer variant="full" className="mb-4" />
-                            }
                             ListEmptyComponent={
                                 <View className="py-10 items-center">
                                     <Text className="text-text-secondary">No reports found.</Text>

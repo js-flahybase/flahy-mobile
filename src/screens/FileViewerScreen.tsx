@@ -1,5 +1,5 @@
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { ArrowLeft, FileText, Share2 } from 'lucide-react-native';
+import { ArrowLeft, FileText, Printer, Share2 } from 'lucide-react-native';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -16,6 +16,7 @@ import {
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import FastImage from 'react-native-fast-image';
 import Pdf from 'react-native-pdf';
+import RNPrint from 'react-native-print';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import WebView from 'react-native-webview';
 import { API_BASE_URL } from '../config';
@@ -64,6 +65,7 @@ export const FileViewerScreen = ({ route, navigation }: any) => {
     const [localPath, setLocalPath] = useState<string | null>(null);
     const [isDownloading, setIsDownloading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isPrinting, setIsPrinting] = useState(false);
     const [imageLoading, setImageLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [pdfPageCount, setPdfPageCount] = useState(0);
@@ -263,6 +265,40 @@ export const FileViewerScreen = ({ route, navigation }: any) => {
         }
     };
 
+    // ============ PRINT ============
+
+    const handlePrint = async () => {
+        if (isPrinting) return;
+        setIsPrinting(true);
+
+        try {
+            if (isHtml) {
+                if (!htmlContent) {
+                    Alert.alert('Error', 'Report is still loading. Please try again.');
+                    return;
+                }
+                await RNPrint.print({ html: htmlContent, jobName: file.name });
+                return;
+            }
+
+            // PDF, image, or anything else — print from a local cached file.
+            let cachedPath = localPath;
+            if (!cachedPath) {
+                cachedPath = await downloadToCache();
+            }
+            if (!cachedPath) {
+                Alert.alert('Error', 'Could not download file for printing.');
+                return;
+            }
+            await RNPrint.print({ filePath: cachedPath, jobName: file.name });
+        } catch (err: any) {
+            console.error('[FileViewer] Print error:', err);
+            Alert.alert('Error', err.message || 'Failed to print.');
+        } finally {
+            setIsPrinting(false);
+        }
+    };
+
     // ============ RENDER CONTENT ============
 
     const renderContent = () => {
@@ -443,6 +479,18 @@ export const FileViewerScreen = ({ route, navigation }: any) => {
                 </Text>
 
                 <View style={s.headerActions}>
+                    <TouchableOpacity
+                        onPress={handlePrint}
+                        style={s.headerBtn}
+                        accessibilityLabel="Print"
+                        disabled={isPrinting}
+                    >
+                        {isPrinting ? (
+                            <ActivityIndicator size="small" color="white" />
+                        ) : (
+                            <Printer size={18} color="white" />
+                        )}
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={handleShare} style={s.headerBtn} accessibilityLabel="Share">
                         <Share2 size={18} color="white" />
                     </TouchableOpacity>

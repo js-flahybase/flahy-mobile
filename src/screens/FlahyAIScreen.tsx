@@ -1,15 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { FileText, Send, Shield, Sparkles } from 'lucide-react-native';
+import { FileText, Paperclip, Send, Shield, X } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
@@ -19,8 +21,8 @@ import {
   View,
 } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { Header } from '../components/Header';
-import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { API_BASE_URL, patientApiRoutes, WEB_APP_URL } from '../config';
 import { RootStackParamList } from '../navigation/types';
@@ -28,7 +30,6 @@ import api from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useChatStore } from '../store/chatStore';
 import { FLAHY_AI_SYSTEM_PROMPT } from '../constants/flahyAIPrompt';
-import { MEDICAL_DISCLAIMER } from '../constants/medicalDisclaimer';
 import { colors } from '../theme/colors';
 
 type Message = {
@@ -36,6 +37,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   isStreaming?: boolean;
+  attachment?: { uri: string; mediaType: string; fileName?: string };
 };
 
 const SUGGESTIONS = [
@@ -295,7 +297,15 @@ type ReportFile = {
   filename: string;
 };
 
-const MAX_REPORT_TEXT_CHARS = 12000;
+// Only one report is ever sent to the AI (see loadReports), so this can
+// safely be generous without ballooning the request size. This is a safety
+// cap against a truly pathological report, not an expected truncation point.
+const MAX_REPORT_TEXT_CHARS = 100000;
+// Cap how many reports get their full binary (PDF/image) sent to the AI.
+// Every message resends the whole conversation including these attachments,
+// so keeping this low is what keeps replies fast. All reports still
+// contribute their text content (see textSections) regardless of this cap.
+const MAX_FILE_ATTACHMENTS = 2;
 
 function getMimeTypeFromName(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -456,14 +466,30 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
           isStreaming: true,
         };
       }
-      return { id: m.id, role: m.role, content: m.content };
+      return { id: m.id, role: m.role, content: m.content, attachment: m.attachment };
     }),
   ];
 
-  // Report file data — attached to the first user message (same as web)
-  const reportFileRef = useRef<ReportFile | null>(null);
-  // Report text (used for HTML/JSON reports) — injected as REPORT_TEXT in system prompt.
+  // All of the user's report files (PDF/image ones) — attached to the first
+  // user message (same as web), one `file` part per report.
+  const reportFilesRef = useRef<ReportFile[]>([]);
+  // Combined text of all HTML/JSON/plain-text reports — injected as REPORT_TEXT
+  // in the system prompt, one section per report.
   const reportTextRef = useRef<string | null>(null);
+
+  // In-memory cache of base64 for user-attached photos, keyed by message id.
+  // Deliberately NOT persisted — cleared on app restart so we never resend a
+  // stale/oversized image blob, but stays available for follow-up questions
+  // within the same live session.
+  const attachmentCacheRef = useRef<Map<string, { base64: string; mediaType: string }>>(
+    new Map(),
+  );
+  const [pendingAttachment, setPendingAttachment] = useState<{
+    uri: string;
+    mediaType: string;
+    fileName?: string;
+    base64: string;
+  } | null>(null);
 
   const scrollToBottom = (animated = true) => {
     const offset = contentHeightRef.current - layoutHeightRef.current;
@@ -504,42 +530,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   // Initialize thread + load report on mount
   useEffect(() => {
     if (!currentThreadId) createThread();
-    loadLatestReport();
+    loadReports();
   }, []);
 
-  const convertHtmlToPdfBase64 = async (
-    html: string,
-  ): Promise<string | null> => {
-    try {
-      const response = await fetch(`${WEB_APP_URL}/api/html-to-pdf`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ html }),
-      });
-      if (!response.ok) return null;
-      // Read as base64 via blob util style path. Fallback to text hex decoding isn't safe for binary,
-      // so use blob() + FileReader-equivalent via arrayBuffer -> base64.
-      const arrayBuffer = await response.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = '';
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(
-          null,
-          Array.from(bytes.subarray(i, i + chunkSize)) as any,
-        );
-      }
-      const btoaFn = (globalThis as any).btoa as
-        | ((s: string) => string)
-        | undefined;
-      return typeof btoaFn === 'function' ? btoaFn(binary) : null;
-    } catch (err) {
-      console.error('html-to-pdf conversion failed:', err);
-      return null;
-    }
-  };
-
-  const loadLatestReport = async () => {
+  const loadReports = async () => {
     setIsInitializing(true);
     try {
       const token = useAuthStore.getState().token;
@@ -568,129 +562,206 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         return;
       }
 
-      const latestReport = reports[0];
-      const fileName: string =
-        latestReport.file_name || `report-${latestReport.id}`;
-
-      // 2. Download the actual report file as base64
-      const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${latestReport.id}`;
-      const downloadResponse = await ReactNativeBlobUtil.fetch(
-        'GET',
-        downloadUrl,
-        {
-          Authorization: `Bearer ${token}`,
-        },
-      );
-
-      const respHeaders = (downloadResponse as any).respInfo?.headers;
-      const headerCT = normalizeContentType(
-        pickHeader(respHeaders, 'content-type') ||
-          pickHeader(respHeaders, 'Content-Type') ||
-          '',
-      );
-      const nameCT = normalizeContentType(getMimeTypeFromName(fileName));
-      let effectiveCT = headerCT || nameCT;
-
       // Reset any previous report context
-      reportFileRef.current = null;
+      reportFilesRef.current = [];
       reportTextRef.current = null;
+      const textSections: string[] = [];
 
-      // Read as text if the content-type or filename hints at text; sniff a 2KB
-      // sample before committing so a misreported content-type can't strand the AI
-      // with a useless binary payload.
-      const maybeText =
-        effectiveCT === 'text/html' ||
-        effectiveCT === 'application/json' ||
-        effectiveCT.startsWith('text/') ||
-        !effectiveCT ||
-        effectiveCT === 'application/octet-stream';
+      // Group reports by person (backend may return multiple people's
+      // reports, e.g. a family account). For each of up to 2 people, prefer
+      // their HTML report if they have one — its full text is extracted for
+      // the AI — and only fall back to their newest report of any other
+      // type if none of their reports are HTML. File names can't be trusted
+      // to tell HTML apart from PDF, so the downloaded content is checked.
+      const personKey = (r: any) =>
+        [r.first_name, r.middle_name, r.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
 
-      let textContent: string | null = null;
-      if (maybeText) {
+      const personOrder: string[] = [];
+      const personGroups = new Map<string, any[]>();
+      for (const r of reports) {
+        const key = personKey(r) || `_report_${r.id}`;
+        if (!personGroups.has(key)) {
+          personOrder.push(key);
+          personGroups.set(key, []);
+        }
+        personGroups.get(key)!.push(r);
+      }
+
+      for (const key of personOrder.slice(0, 2)) {
+      const personReports = personGroups.get(key)!;
+      let usedHtmlForPerson = false;
+      let applyFallback: (() => void) | null = null;
+      for (let i = 0; i < personReports.length && !usedHtmlForPerson; i++) {
+        const reportMeta = personReports[i];
+        const personName = personKey(reportMeta);
+        const fileName: string =
+          reportMeta.file_name ||
+          (personName ? `${personName} report` : `report-${reportMeta.id}`);
+        const reportLabel = personName
+          ? `${fileName} (${personName})`
+          : fileName;
         try {
-          const raw: string = (downloadResponse as any).text?.() ?? '';
-          if (raw) textContent = raw;
-        } catch (err) {
-          console.warn(
-            'downloadResponse.text() failed, falling back to base64 decode:',
-            err,
+          const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${reportMeta.id}`;
+          const downloadResponse = await ReactNativeBlobUtil.fetch(
+            'GET',
+            downloadUrl,
+            {
+              Authorization: `Bearer ${token}`,
+            },
+          );
+
+          const respHeaders = (downloadResponse as any).respInfo?.headers;
+          const headerCT = normalizeContentType(
+            pickHeader(respHeaders, 'content-type') ||
+              pickHeader(respHeaders, 'Content-Type') ||
+              '',
+          );
+          const nameCT = normalizeContentType(getMimeTypeFromName(fileName));
+          let effectiveCT = headerCT || nameCT;
+
+          // Read as text if the content-type or filename hints at text; sniff a 2KB
+          // sample before committing so a misreported content-type can't strand the AI
+          // with a useless binary payload.
+          const maybeText =
+            effectiveCT === 'text/html' ||
+            effectiveCT === 'application/json' ||
+            effectiveCT.startsWith('text/') ||
+            !effectiveCT ||
+            effectiveCT === 'application/octet-stream';
+
+          let textContent: string | null = null;
+          if (maybeText) {
+            try {
+              const raw: string = (downloadResponse as any).text?.() ?? '';
+              if (raw) textContent = raw;
+            } catch (err) {
+              console.warn(
+                'downloadResponse.text() failed, falling back to base64 decode:',
+                err,
+              );
+            }
+            if (!textContent) {
+              const b64 = downloadResponse.base64();
+              const decoded = decodeBase64Utf8(b64);
+              if (decoded) textContent = decoded;
+            }
+          }
+
+          // If sniff identifies HTML/JSON, override a lying/missing content-type.
+          if (textContent) {
+            const sample = textContent.slice(0, 2048);
+            if (effectiveCT !== 'text/html' && looksLikeHtml(sample))
+              effectiveCT = 'text/html';
+            else if (
+              effectiveCT !== 'application/json' &&
+              looksLikeJson(sample)
+            )
+              effectiveCT = 'application/json';
+          }
+
+          const applyReport = () => {
+            if (effectiveCT === 'text/html' && textContent) {
+              // Expose the report as REPORT_TEXT — this captures the full
+              // text content of the report. We deliberately do NOT also
+              // attach a converted PDF here: it's redundant with the text
+              // above (same content, no extra info the AI doesn't already
+              // have) and was the single biggest contributor to oversized
+              // chat requests that failed outright (a converted report PDF
+              // alone measured ~5MB, likely exceeding the backend's request
+              // size limit).
+              const plain = htmlToPlainText(textContent);
+              if (plain)
+                textSections.push(`--- Report: ${reportLabel} ---\n${plain}`);
+            } else if (effectiveCT === 'application/json' && textContent) {
+              const formatted = jsonToReportText(textContent);
+              if (formatted)
+                textSections.push(
+                  `--- Report: ${reportLabel} ---\n${formatted}`,
+                );
+            } else if (
+              effectiveCT === 'application/pdf' ||
+              effectiveCT.startsWith('image/')
+            ) {
+              if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+                reportFilesRef.current.push({
+                  base64: downloadResponse.base64(),
+                  mediaType: effectiveCT,
+                  filename: fileName,
+                });
+              } else {
+                // Over the attachment cap and there's no text form of this
+                // report — at least tell the AI it exists by name.
+                textSections.push(
+                  `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+                );
+              }
+            } else if (textContent) {
+              // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
+              const trimmed = textContent
+                .trim()
+                .slice(0, MAX_REPORT_TEXT_CHARS);
+              if (trimmed)
+                textSections.push(
+                  `--- Report: ${reportLabel} ---\n${trimmed}`,
+                );
+            } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
+              // Unknown binary — fall back to filename-based MIME as a best guess.
+              reportFilesRef.current.push({
+                base64: downloadResponse.base64(),
+                mediaType: nameCT,
+                filename: fileName,
+              });
+            } else {
+              textSections.push(
+                `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+              );
+            }
+          };
+
+          if (effectiveCT === 'text/html' && textContent) {
+            applyReport();
+            usedHtmlForPerson = true;
+          } else if (i === 0) {
+            // Newest report for this person isn't HTML: keep it as the
+            // fallback in case none of their other reports are HTML either.
+            applyFallback = applyReport;
+          }
+        } catch (err: any) {
+          console.error(
+            `Failed to load report "${fileName}":`,
+            err?.message,
           );
         }
-        if (!textContent) {
-          const b64 = downloadResponse.base64();
-          const decoded = decodeBase64Utf8(b64);
-          if (decoded) textContent = decoded;
-        }
       }
 
-      // If sniff identifies HTML/JSON, override a lying/missing content-type.
-      if (textContent) {
-        const sample = textContent.slice(0, 2048);
-        if (effectiveCT !== 'text/html' && looksLikeHtml(sample))
-          effectiveCT = 'text/html';
-        else if (effectiveCT !== 'application/json' && looksLikeJson(sample))
-          effectiveCT = 'application/json';
+      if (!usedHtmlForPerson && applyFallback) {
+        (applyFallback as () => void)();
+      }
       }
 
-      if (effectiveCT === 'text/html' && textContent) {
-        // Always expose the report as REPORT_TEXT so the AI has it even if PDF
-        // conversion fails or the chat route can't read a PDF attachment.
-        const plain = htmlToPlainText(textContent);
-        if (plain) reportTextRef.current = plain;
-
-        // Best-effort: also convert to PDF so vision models can see layout.
-        // If this fails (e.g. html-to-pdf endpoint is unavailable) we still have REPORT_TEXT.
-        const pdfBase64 = await convertHtmlToPdfBase64(textContent);
-        if (pdfBase64) {
-          reportFileRef.current = {
-            base64: pdfBase64,
-            mediaType: 'application/pdf',
-            filename: fileName.replace(/\.(html?|json)$/i, '') + '.pdf',
-          };
-        }
-      } else if (effectiveCT === 'application/json' && textContent) {
-        const formatted = jsonToReportText(textContent);
-        if (formatted) reportTextRef.current = formatted;
-      } else if (
-        effectiveCT === 'application/pdf' ||
-        effectiveCT.startsWith('image/')
-      ) {
-        reportFileRef.current = {
-          base64: downloadResponse.base64(),
-          mediaType: effectiveCT,
-          filename: fileName,
-        };
-      } else if (textContent) {
-        // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
-        const trimmed = textContent.trim().slice(0, MAX_REPORT_TEXT_CHARS);
-        if (trimmed) reportTextRef.current = trimmed;
-      } else {
-        // Unknown binary — fall back to filename-based MIME as a best guess.
-        reportFileRef.current = {
-          base64: downloadResponse.base64(),
-          mediaType: nameCT,
-          filename: fileName,
-        };
+      if (textSections.length > 0) {
+        reportTextRef.current = textSections.join('\n\n');
       }
 
-      console.log('[FlahyAI] report loaded:', {
-        fileName,
-        headerCT,
-        effectiveCT,
+      console.log('[FlahyAI] reports loaded:', {
+        peopleCount: personOrder.slice(0, 2).length,
+        reportCount: reports.length,
+        filesAttached: reportFilesRef.current.length,
         hasText: !!reportTextRef.current,
         textLen: reportTextRef.current?.length ?? 0,
-        hasFile: !!reportFileRef.current,
-        fileMedia: reportFileRef.current?.mediaType,
       });
 
-      // 3. Show generic greeting (report loaded silently in background)
+      // 3. Show generic greeting (reports loaded silently in background)
       setGreetingMessage({
         id: 'greeting',
         role: 'assistant',
         content: 'Hello! I am FlahyAI. How can I help you today?',
       });
     } catch (error: any) {
-      console.error('Failed to load report:', error?.message);
+      console.error('Failed to load reports:', error?.message);
       setGreetingMessage({
         id: 'greeting',
         role: 'assistant',
@@ -701,19 +772,143 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     }
   };
 
+  // Max raw photo size accepted for a chat attachment. No image-resize
+  // library exists in this app today, so we simply reject oversized photos
+  // rather than compressing them.
+  const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+  const normalizeFsPath = (uri: string) => {
+    // react-native-blob-util expects a filesystem path, not a file:// URI.
+    // iOS image-picker returns file:///... which otherwise fails with
+    // "No such file 'file:...'".
+    let path = uri;
+    if (path.startsWith('file://')) {
+      path = path.replace('file://', '');
+    }
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      // keep original if decode fails
+    }
+    return path;
+  };
+
+  const readAttachmentAsset = async (asset: {
+    uri?: string;
+    fileName?: string;
+    type?: string;
+    fileSize?: number;
+    base64?: string;
+  }) => {
+    if (!asset.uri) return;
+
+    try {
+      let base64 = asset.base64;
+      if (!base64) {
+        const path = normalizeFsPath(asset.uri);
+        base64 = await ReactNativeBlobUtil.fs.readFile(path, 'base64');
+      }
+
+      const approxBytes = asset.fileSize ?? base64.length * 0.75;
+      if (approxBytes > MAX_ATTACHMENT_BYTES) {
+        Alert.alert('Photo Too Large', 'Please choose a photo under 8MB.');
+        return;
+      }
+
+      setPendingAttachment({
+        uri: asset.uri,
+        mediaType: asset.type || 'image/jpeg',
+        fileName: asset.fileName,
+        base64,
+      });
+    } catch (err) {
+      console.error('Failed to read attachment:', err);
+      Alert.alert('Error', 'Could not load that photo. Please try again.');
+    }
+  };
+
+  const handleGalleryAttach = async () => {
+    const result = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+      includeBase64: true,
+    });
+    if (result.assets && result.assets[0]) {
+      await readAttachmentAsset(result.assets[0]);
+    }
+  };
+
+  const handleCameraAttach = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera Permission',
+            message: 'Flahy needs access to your camera to take photos.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          },
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
+          return;
+        }
+      } catch (err) {
+        console.warn(err);
+        return;
+      }
+    }
+
+    const result = await launchCamera({
+      mediaType: 'photo',
+      saveToPhotos: true,
+      includeBase64: true,
+    });
+    if (result.assets && result.assets[0]) {
+      await readAttachmentAsset(result.assets[0]);
+    }
+  };
+
+  const handleAttachPress = () => {
+    Alert.alert('Add Photo', 'Choose source', [
+      { text: 'Camera', onPress: handleCameraAttach },
+      { text: 'Photo Library', onPress: handleGalleryAttach },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   const sendMessage = async (text: string = inputText) => {
     const msgText = text.trim();
-    if (!msgText || isLoading) return;
+    if ((!msgText && !pendingAttachment) || isLoading) return;
 
+    const attachmentToSend = pendingAttachment;
     const userMsgId = Date.now().toString();
     const userMsg = {
       id: userMsgId,
       role: 'user' as const,
       content: msgText,
+      ...(attachmentToSend
+        ? {
+            attachment: {
+              uri: attachmentToSend.uri,
+              mediaType: attachmentToSend.mediaType,
+              fileName: attachmentToSend.fileName,
+            },
+          }
+        : {}),
     };
 
     storeAddMessage(userMsg);
+    if (attachmentToSend) {
+      attachmentCacheRef.current.set(userMsgId, {
+        base64: attachmentToSend.base64,
+        mediaType: attachmentToSend.mediaType,
+      });
+    }
     setInputText('');
+    setPendingAttachment(null);
     setIsLoading(true);
 
     const aiMsgId = (Date.now() + 1).toString();
@@ -736,26 +931,41 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       const filteredMessages = allMessages.filter(
         m =>
           m.id !== aiMsgId && // skip the empty AI placeholder
-          m.content && // skip empty
+          (m.content || m.attachment) && // skip empty (unless it carries an attachment)
           !m.content.startsWith('Error:') && // skip error messages
           m.content !== 'No response received.' && // skip failed responses
           m.content !== 'Thinking...', // skip placeholders
       );
 
-      // Find the first user message index to attach the report file
+      // Find the first user message index to attach the report files
       const firstUserIdx = filteredMessages.findIndex(m => m.role === 'user');
-      const report = reportFileRef.current;
+      const reports = reportFilesRef.current;
 
       const apiMessages = filteredMessages.map((m, idx) => {
         const parts: any[] = [{ type: 'text', text: m.content }];
 
-        // Attach report file to the first user message (same as web)
-        if (idx === firstUserIdx && m.role === 'user' && report) {
-          parts.push({
-            type: 'file',
-            mediaType: report.mediaType,
-            url: `data:${report.mediaType};base64,${report.base64}`,
-          });
+        // Attach every report file to the first user message (same as web)
+        if (idx === firstUserIdx && m.role === 'user') {
+          for (const report of reports) {
+            parts.push({
+              type: 'file',
+              mediaType: report.mediaType,
+              url: `data:${report.mediaType};base64,${report.base64}`,
+            });
+          }
+        }
+
+        // Attach a user-picked photo, if it's still in the in-memory cache
+        // (cleared on app restart — see attachmentCacheRef declaration).
+        if (m.role === 'user') {
+          const cachedAttachment = attachmentCacheRef.current.get(m.id);
+          if (cachedAttachment) {
+            parts.push({
+              type: 'file',
+              mediaType: cachedAttachment.mediaType,
+              url: `data:${cachedAttachment.mediaType};base64,${cachedAttachment.base64}`,
+            });
+          }
         }
 
         return { id: m.id, role: m.role, parts };
@@ -766,20 +976,28 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         ? `${FLAHY_AI_SYSTEM_PROMPT}\n\nREPORT_TEXT:\n${reportText}`
         : FLAHY_AI_SYSTEM_PROMPT;
 
+      const requestBody = JSON.stringify({
+        messages: apiMessages,
+        system: effectiveSystem,
+        tools: {},
+      });
+      console.log('[FlahyAI][perf] request payload size (bytes):', requestBody.length);
+      const requestStartedAt = Date.now();
+
       const response = await fetch(`${WEB_APP_URL}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          messages: apiMessages,
-          system: effectiveSystem,
-          tools: {},
-        }),
+        body: requestBody,
         // @ts-ignore — React Native specific option for text streaming
         reactNative: { textStreaming: true },
       });
+      console.log(
+        '[FlahyAI][perf] headers received after (ms):',
+        Date.now() - requestStartedAt,
+      );
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => 'Unknown error');
@@ -791,6 +1009,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       // Streaming path — RN 0.71+ with textStreaming enabled
       if (response.body && typeof response.body.getReader === 'function') {
         const reader = response.body.getReader();
+        let firstChunkLogged = false;
         const decoder = new TextDecoder();
         let buffer = '';
         let fullContent = '';
@@ -798,6 +1017,14 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+
+          if (!firstChunkLogged) {
+            firstChunkLogged = true;
+            console.log(
+              '[FlahyAI][perf] first stream chunk after (ms):',
+              Date.now() - requestStartedAt,
+            );
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -819,6 +1046,11 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             fullContent += delta;
           }
         }
+
+        console.log(
+          '[FlahyAI][perf] full reply finished after (ms):',
+          Date.now() - requestStartedAt,
+        );
 
         // Finalize: persist completed content to store, clear streaming state
         storeUpdateMessage(aiMsgId, {
@@ -1136,37 +1368,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               </Text>
             </View>
 
-            <View
-              style={{
-                backgroundColor: '#FFFBEB',
-                borderRadius: 16,
-                padding: 20,
-                marginBottom: 24,
-                borderWidth: 1,
-                borderColor: '#FDE68A',
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 16,
-                  fontWeight: '600',
-                  color: colors['text-primary'],
-                  marginBottom: 12,
-                }}
-              >
-                Medical disclaimer
-              </Text>
-              <Text
-                style={{
-                  fontSize: 14,
-                  color: colors['text-secondary'],
-                  lineHeight: 22,
-                }}
-              >
-                {MEDICAL_DISCLAIMER}
-              </Text>
-            </View>
-
             <Text
               style={{
                 fontSize: 13,
@@ -1380,11 +1581,27 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                           />
                         )}
                       </>
-                    ) : item.content ? (
-                      <Text className="text-base leading-6 text-white">
-                        {item.content}
-                      </Text>
-                    ) : null}
+                    ) : (
+                      <>
+                        {item.attachment && (
+                          <Image
+                            source={{ uri: item.attachment.uri }}
+                            style={{
+                              width: 180,
+                              height: 180,
+                              borderRadius: 12,
+                              marginBottom: item.content ? 8 : 0,
+                            }}
+                            resizeMode="cover"
+                          />
+                        )}
+                        {item.content ? (
+                          <Text className="text-base leading-6 text-white">
+                            {item.content}
+                          </Text>
+                        ) : null}
+                      </>
+                    )}
                   </View>
                 </View>
               )}
@@ -1399,11 +1616,28 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               keyboardHeight > 0 && { paddingBottom: keyboardHeight },
             ]}
           >
-            <MedicalDisclaimer variant="short" className="mx-4 mb-2" />
-            <View style={inputStyles.bar}>
-              <View style={inputStyles.iconCircle}>
-                <Sparkles size={20} color={colors.primary} />
+            {pendingAttachment && (
+              <View style={inputStyles.attachmentPreviewRow}>
+                <Image
+                  source={{ uri: pendingAttachment.uri }}
+                  style={inputStyles.attachmentPreviewImage}
+                  resizeMode="cover"
+                />
+                <TouchableOpacity
+                  onPress={() => setPendingAttachment(null)}
+                  style={inputStyles.attachmentRemoveBtn}
+                >
+                  <X size={14} color="white" />
+                </TouchableOpacity>
               </View>
+            )}
+            <View style={inputStyles.bar}>
+              <TouchableOpacity
+                style={inputStyles.iconCircle}
+                onPress={handleAttachPress}
+              >
+                <Paperclip size={20} color={colors.primary} />
+              </TouchableOpacity>
               <View style={inputStyles.inputWrap}>
                 <TextInput
                   value={inputText}
@@ -1417,10 +1651,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               </View>
               <TouchableOpacity
                 onPress={() => sendMessage()}
-                disabled={isLoading || !inputText.trim()}
+                disabled={isLoading || (!inputText.trim() && !pendingAttachment)}
                 style={[
                   inputStyles.sendBtn,
-                  isLoading || !inputText.trim()
+                  isLoading || (!inputText.trim() && !pendingAttachment)
                     ? inputStyles.sendBtnDisabled
                     : inputStyles.sendBtnActive,
                 ]}
@@ -1431,7 +1665,9 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                   <Send
                     size={18}
                     color={
-                      !inputText.trim() ? colors['text-secondary'] : 'white'
+                      !inputText.trim() && !pendingAttachment
+                        ? colors['text-secondary']
+                        : 'white'
                     }
                   />
                 )}
@@ -1565,6 +1801,30 @@ const inputStyles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     backgroundColor: '#f9fafb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentPreviewRow: {
+    position: 'relative',
+    alignSelf: 'flex-start',
+    width: 64,
+    height: 64,
+    marginHorizontal: 8,
+    marginBottom: 8,
+  },
+  attachmentPreviewImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+  },
+  attachmentRemoveBtn: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
   },

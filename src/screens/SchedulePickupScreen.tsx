@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
 import { ArrowLeft, Clock } from 'lucide-react-native';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Calendar, DateData, LocaleConfig } from 'react-native-calendars';
 import DatePicker from 'react-native-date-picker';
@@ -20,10 +20,9 @@ const isConsentMissingError = (err: any) => {
     );
 };
 
-// Configure locale if needed (optional, keeping default for now)
 LocaleConfig.locales['en'] = {
   monthNames: [
-    'January', 'February', 'March', 'April', 'May', 'June', 
+    'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
   ],
   monthNamesShort: ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'],
@@ -33,17 +32,83 @@ LocaleConfig.locales['en'] = {
 };
 LocaleConfig.defaultLocale = 'en';
 
+// 7 AM to 6 PM, Monday–Sunday, 30-minute slots.
+const SLOT_START_MINUTES = 7 * 60;
+const SLOT_END_MINUTES = 18 * 60;
+const SLOT_DURATION_MINUTES = 30;
+const LAST_START_MINUTES = SLOT_END_MINUTES - SLOT_DURATION_MINUTES; // 5:30 PM
+
+const formatClock = (totalMinutes: number) => {
+    const hours24 = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const period = hours24 >= 12 ? 'PM' : 'AM';
+    const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+    return `${hours12}:${String(minutes).padStart(2, '0')} ${period}`;
+};
+
+const getTodayString = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+};
+
+const formatSelectedDate = (dateString: string): string => {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    return date.toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+    });
+};
+
+const parseDateString = (dateString: string) => {
+    const [year, month, day] = dateString.split('-').map(Number);
+    return new Date(year, month - 1, day);
+};
+
+const dateWithMinutes = (base: Date, totalMinutes: number) => {
+    const d = new Date(base);
+    d.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
+    return d;
+};
+
+/** Next valid 30-min start after "now" (exclusive of current partial slot). */
+const nextHalfHourStartMinutes = (now: Date) => {
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    return Math.ceil((minutes + 1) / SLOT_DURATION_MINUTES) * SLOT_DURATION_MINUTES;
+};
+
+const getSelectableStartRange = (selectedDate: string) => {
+    let minStart = SLOT_START_MINUTES;
+    if (selectedDate === getTodayString()) {
+        minStart = Math.max(SLOT_START_MINUTES, nextHalfHourStartMinutes(new Date()));
+    }
+    return {
+        minStart,
+        maxStart: LAST_START_MINUTES,
+        hasSlots: minStart <= LAST_START_MINUTES,
+    };
+};
+
+const toSlotValue = (date: Date) => {
+    const startMinutes = date.getHours() * 60 + date.getMinutes();
+    const endMinutes = startMinutes + SLOT_DURATION_MINUTES;
+    return `${formatClock(startMinutes)} - ${formatClock(endMinutes)}`;
+};
+
 export const SchedulePickupScreen = () => {
     const navigation = useNavigation();
     const [selectedDate, setSelectedDate] = useState('');
     const [time, setTime] = useState('');
     const [address, setAddress] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-
-    const [date, setDate] = useState(new Date());
+    const [pickerDate, setPickerDate] = useState(() => dateWithMinutes(new Date(), 9 * 60));
     const [open, setOpen] = useState(false);
 
-    // Custom Alert State
     const [alertConfig, setAlertConfig] = useState<{
         visible: boolean;
         title: string;
@@ -62,14 +127,60 @@ export const SchedulePickupScreen = () => {
 
     const hideAlert = () => {
         setAlertConfig(prev => ({ ...prev, visible: false }));
-        // If success, go back after closing alert
         if (alertConfig.type === 'success') {
             navigation.goBack();
         }
     };
 
+    const timeBounds = useMemo(() => {
+        if (!selectedDate) {
+            return null;
+        }
+        const base = parseDateString(selectedDate);
+        const { minStart, maxStart, hasSlots } = getSelectableStartRange(selectedDate);
+        return {
+            hasSlots,
+            minimumDate: dateWithMinutes(base, minStart),
+            maximumDate: dateWithMinutes(base, maxStart),
+            defaultDate: dateWithMinutes(base, Math.min(Math.max(minStart, 9 * 60), maxStart)),
+        };
+    }, [selectedDate]);
+
     const onDayPress = (day: DateData) => {
         setSelectedDate(day.dateString);
+        setTime('');
+    };
+
+    const openTimePicker = () => {
+        if (!selectedDate) {
+            showAlert('Select Date', 'Please select a date first.', 'info');
+            return;
+        }
+        if (!timeBounds?.hasSlots) {
+            showAlert(
+                'No Slots Available',
+                'No remaining time slots today. Please choose another date.',
+                'info',
+            );
+            return;
+        }
+
+        // Keep current selection if still valid; otherwise start inside the allowed window.
+        const currentMinutes = pickerDate.getHours() * 60 + pickerDate.getMinutes();
+        const minM = timeBounds.minimumDate.getHours() * 60 + timeBounds.minimumDate.getMinutes();
+        const maxM = timeBounds.maximumDate.getHours() * 60 + timeBounds.maximumDate.getMinutes();
+        if (currentMinutes < minM || currentMinutes > maxM) {
+            setPickerDate(timeBounds.defaultDate);
+        } else {
+            setPickerDate(dateWithMinutes(parseDateString(selectedDate), currentMinutes));
+        }
+        setOpen(true);
+    };
+
+    const handleTimeConfirm = (date: Date) => {
+        setOpen(false);
+        setPickerDate(date);
+        setTime(toSlotValue(date));
     };
 
     const handleConfirm = async () => {
@@ -77,12 +188,11 @@ export const SchedulePickupScreen = () => {
             showAlert("Missing Details", "Please fill in all fields (Date, Time, Address).", 'error');
             return;
         }
-        
+
         setIsLoading(true);
         try {
             await userService.schedulePickup(selectedDate, time, address);
-            
-            // Refetch profile to get updated status from server
+
             try {
                 const profileResponse = await userService.getProfile();
                 const freshUser = profileResponse.data || profileResponse;
@@ -96,72 +206,57 @@ export const SchedulePickupScreen = () => {
                     return;
                 }
                 console.error("Failed to refresh profile after scheduling", err);
-                 // Fallback: update locally if fetch fails
                  const user = useAuthStore.getState().user;
                  if (user) {
                      useAuthStore.getState().setUser({ ...user, can_schedule_appointment: false });
                  }
             }
 
-            showAlert("Pickup Scheduled", `Pickup scheduled for ${selectedDate} at ${time}. Our team will contact you shortly.`, 'success');
+            showAlert("Blood Draw Scheduled", `Blood draw scheduled for ${selectedDate} at ${time}. Our team will contact you shortly.`, 'success');
         } catch (error: any) {
-            console.error("Pickup scheduling failed", error);
-            showAlert("Error", error.response?.data?.message || "Failed to schedule pickup. Please try again.", 'error');
+            console.error("Blood draw scheduling failed", error);
+            showAlert("Error", error.response?.data?.message || "Failed to schedule blood draw. Please try again.", 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayString();
 
     return (
         <ScreenWrapper className="flex-1 bg-[#FFFBE6]">
-            <KeyboardAwareScrollView 
+            <KeyboardAwareScrollView
                 contentContainerStyle={{ flexGrow: 1 }}
                 enableOnAndroid={true}
                 extraScrollHeight={20}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Header */}
                 <View className="flex-row items-center px-6 py-4">
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         onPress={() => navigation.goBack()}
                         className="p-2 -ml-2 rounded-full active:bg-gray-100"
                     >
                         <ArrowLeft size={24} color="#2F2F2F" />
                     </TouchableOpacity>
-                    <Text className="text-xl font-bold text-[#2F2F2F] ml-2">Schedule Pick-up</Text>
+                    <Text className="text-xl font-bold text-[#2F2F2F] ml-2">Schedule Blood Draw</Text>
                 </View>
 
-                {/* Content */}
                 <View className="flex-1 px-6 pt-4 pb-10">
                     <Text className="text-base text-gray-600 mb-6 text-center">
-                        Please select a preferred date for your sample pickup.
+                        Please select a date and a 30-minute slot (7:00 AM – 6:00 PM, Monday to Sunday).
                     </Text>
 
                     <View className="bg-white rounded-2xl shadow-sm overflow-hidden p-4">
                         <Calendar
-                            // Initially visible month. Default = Date()
                             current={today}
-                            // Minimum date that can be selected, dates before minDate will be grayed out. Default = undefined
                             minDate={today}
-                            // Handler which gets executed on day press. Default = undefined
                             onDayPress={onDayPress}
-                            // Month format in calendar title. Formatting values: http://arshaw.com/xdate/#Formatting
                             monthFormat={'MMMM yyyy'}
-                            // Hide month navigation arrows. Default = false
                             hideArrows={false}
-                            // Do not show days of other months in month page. Default = false
                             hideExtraDays={true}
-                            // If hideArrows = false and hideExtraDays = false do not switch month when tapping on greyed out
-                            // day from another month that is visible in calendar page. Default = false
                             disableMonthChange={true}
-                            // If firstDay=1 week starts from Monday. Note that dayNames and dayNamesShort should still start from Sunday
                             firstDay={1}
-                            // Enable the option to swipe between months. Default = false
                             enableSwipeMonths={true}
-                            
-                            // Styling
                             theme={{
                                 backgroundColor: '#ffffff',
                                 calendarBackground: '#ffffff',
@@ -177,7 +272,7 @@ export const SchedulePickupScreen = () => {
                                 disabledArrowColor: '#d9e1e8',
                                 monthTextColor: '#2F2F2F',
                                 indicatorColor: '#4FB5B0',
-                                textDayFontFamily: 'System', // Use default system fonts
+                                textDayFontFamily: 'System',
                                 textMonthFontFamily: 'System',
                                 textDayHeaderFontFamily: 'System',
                                 textDayFontWeight: '400',
@@ -193,40 +288,41 @@ export const SchedulePickupScreen = () => {
                         />
                     </View>
 
-                    {/* Time Input (Native Picker) */}
+                    {selectedDate ? (
+                        <Text className="text-center text-[#4FB5B0] font-medium mt-3">
+                            Selected date: {formatSelectedDate(selectedDate)}
+                        </Text>
+                    ) : null}
+
                     <View className="mt-8 mb-4">
-                        <Text className="text-gray-700 font-medium mb-2">Preferred Time</Text>
-                        <TouchableOpacity 
-                            onPress={() => setOpen(true)}
+                        <Text className="text-gray-700 font-medium mb-2">Preferred Time Slot</Text>
+                        <TouchableOpacity
+                            onPress={openTimePicker}
                             className="bg-white p-4 rounded-xl shadow-sm flex-row items-center justify-between"
                         >
-                            <Text className={time ? "text-[#2F2F2F]" : "text-[#9CA3AF]"}>
-                                {time || "e.g. 10:00 AM"}
+                            <Text className={time ? 'text-[#2F2F2F]' : 'text-[#9CA3AF]'}>
+                                {time || 'e.g. 10:00 AM - 10:30 AM'}
                             </Text>
                             <Clock size={20} color="#6B7280" />
                         </TouchableOpacity>
-                        
-                        <DatePicker
-                            modal
-                            open={open}
-                            date={date}
-                            mode="time"
-                            onConfirm={(date) => {
-                                setOpen(false)
-                                setDate(date)
-                                // Format to HH:mm A
-                                const formatted = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                                setTime(formatted)
-                            }}
-                            onCancel={() => {
-                                setOpen(false)
-                            }}
-                        />
+
+                        {timeBounds ? (
+                            <DatePicker
+                                modal
+                                open={open}
+                                date={pickerDate}
+                                mode="time"
+                                minuteInterval={30}
+                                minimumDate={timeBounds.minimumDate}
+                                maximumDate={timeBounds.maximumDate}
+                                onConfirm={handleTimeConfirm}
+                                onCancel={() => setOpen(false)}
+                            />
+                        ) : null}
                     </View>
 
-                    {/* Address Input */}
                     <View className="mb-6">
-                        <Text className="text-gray-700 font-medium mb-2">Pickup Address</Text>
+                        <Text className="text-gray-700 font-medium mb-2">Blood Draw Address</Text>
                         <TextInput
                             className="bg-white p-4 rounded-xl text-[#2F2F2F] shadow-sm min-h-[100px]"
                             placeholder="Enter full address"
@@ -238,7 +334,6 @@ export const SchedulePickupScreen = () => {
                         />
                     </View>
 
-                    {/* Action Button */}
                     <View className="mt-2 mb-10">
                          <TouchableOpacity
                             onPress={handleConfirm}
@@ -248,12 +343,12 @@ export const SchedulePickupScreen = () => {
                             {isLoading ? (
                                 <ActivityIndicator color="white" />
                             ) : (
-                                <Text className="text-white text-lg font-bold">Confirm Pickup</Text>
+                                <Text className="text-white text-lg font-bold">Schedule Blood Draw</Text>
                             )}
                         </TouchableOpacity>
                     </View>
 
-                    <CustomAlert 
+                    <CustomAlert
                         visible={alertConfig.visible}
                         title={alertConfig.title}
                         message={alertConfig.message}
