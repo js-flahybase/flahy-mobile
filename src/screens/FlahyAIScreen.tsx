@@ -30,7 +30,6 @@ import api from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useChatStore } from '../store/chatStore';
 import { FLAHY_AI_SYSTEM_PROMPT } from '../constants/flahyAIPrompt';
-import { MEDICAL_DISCLAIMER } from '../constants/medicalDisclaimer';
 import { colors } from '../theme/colors';
 
 type Message = {
@@ -1366,37 +1365,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 confidentiality, use data only for providing services to Flahy,
                 and implement appropriate security measures consistent with
                 applicable laws.
-              </Text>
-            </View>
-
-            <View
-              style={{
-                backgroundColor: '#FFFBEB',
-                borderRadius: 16,
-                padding: 20,
-                marginBottom: 24,
-                borderWidth: 1,
-                borderColor: '#FDE68A',
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 16,
-                  fontWeight: '600',
-                  color: colors['text-primary'],
-                  marginBottom: 12,
-                }}
-              >
-                Medical disclaimer
-              </Text>
-              <Text
-                style={{
-                  fontSize: 14,
-                  color: colors['text-secondary'],
-                  lineHeight: 22,
-                }}
-              >
-                {MEDICAL_DISCLAIMER}
               </Text>
             </View>
 

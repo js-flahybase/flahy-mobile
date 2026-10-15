@@ -2,7 +2,6 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
-import { MedicalDisclaimer } from '../components/MedicalDisclaimer';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -28,6 +27,28 @@ const formatPersonName = (file: any) => {
         .filter(Boolean)
         .join(' ')
         .trim();
+};
+
+const reportKind = (file: any, fileName?: string) => {
+    const hint = String(
+        file.file_type ||
+        file.mime_type ||
+        file.content_type ||
+        file.extname ||
+        fileName ||
+        file.report_url ||
+        '',
+    ).toLowerCase();
+    if (hint.includes('html') || hint.endsWith('.htm')) return 'html';
+    if (hint.includes('pdf')) return 'pdf';
+    const ext = (fileName || '').split('.').pop()?.toLowerCase();
+    return ext || 'doc';
+};
+
+const reportSortRank = (type: string) => {
+    if (type === 'html' || type === 'htm') return 0;
+    if (type === 'pdf') return 1;
+    return 2;
 };
 
 export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
@@ -57,19 +78,16 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                     personName,
                     submitted: file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Unknown',
                     size: '0 KB',
-                    type: fileName?.split('.').pop() || 'doc',
+                    type: reportKind(file, fileName),
                     description: file.description || 'No description available for this file.',
                     uri: file.report_url,
                     originalUri: `https://api.flahyhealth.com/api/report/download-report/${file.id || file.report_id}`
                 };
             });
-            // Show HTML reports first, then everything else (PDFs, etc.),
-            // keeping each group's original order.
-            const isHtml = (r: ReportFile) => r.type === 'html' || r.type === 'htm';
-            const sorted = [...mapped].sort((a, b) => {
-                if (isHtml(a) === isHtml(b)) return 0;
-                return isHtml(a) ? -1 : 1;
-            });
+            // HTML first, then PDF. Stable sort keeps the original order inside each group.
+            const sorted = [...mapped].sort(
+                (a, b) => reportSortRank(a.type) - reportSortRank(b.type),
+            );
             setReports(sorted);
         } catch (error) {
             console.error("Failed to fetch reports", error);
@@ -247,9 +265,6 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                             keyExtractor={item => item.id}
                             contentContainerStyle={{ padding: 24, paddingTop: 0, paddingBottom: 20 }}
                             showsVerticalScrollIndicator={false}
-                            // ListHeaderComponent={
-                            //     <MedicalDisclaimer variant="full" className="mb-4" />
-                            // }
                             ListEmptyComponent={
                                 <View className="py-10 items-center">
                                     <Text className="text-text-secondary">No reports found.</Text>
