@@ -64,6 +64,17 @@ export const userService = {
   deleteAccount: async (userId: string) => {
     const response = await api.delete(`/api/user/${userId}`);
     return response.data;
-  }
+  },
+
+  // Builds a Google Wallet pass using a specific report's own image as the
+  // hero image (no separate pre-staged "card" file). Response shape:
+  // { status: 200, data: { save_url } } — save_url is a
+  // https://pay.google.com/gp/v/save/<jwt> link.
+  getGoogleWalletPassForReport: async (reportId: string) => {
+    const response = await api.get('/api/wallet/google-pass-report', {
+      params: { report_id: reportId },
+    });
+    return response.data;
+  },
 };
 

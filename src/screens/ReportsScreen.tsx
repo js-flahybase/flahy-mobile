@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { X } from 'lucide-react-native';
+import { Wallet, X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Text, TouchableOpacity, View } from 'react-native';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -55,6 +55,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
     const [reports, setReports] = useState<ReportFile[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [walletLoadingId, setWalletLoadingId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchReports();
@@ -175,6 +176,29 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
         });
     };
 
+    const handleAddToWallet = async (file: ReportFile) => {
+        if (walletLoadingId) return;
+        setWalletLoadingId(file.id);
+        try {
+            const result = await userService.getGoogleWalletPassForReport(file.id);
+            const saveUrl = result?.data?.save_url || result?.save_url;
+            if (!saveUrl) {
+                Alert.alert('Error', 'Could not get your Google Wallet pass. Please try again later.');
+                return;
+            }
+            await Linking.openURL(saveUrl);
+        } catch (error: any) {
+            console.error('Add to Google Wallet failed', error);
+            const message =
+                error.response?.status === 404
+                    ? 'Could not find this report. Please try again later.'
+                    : error.response?.data?.message || 'Could not add to Google Wallet. Please try again later.';
+            Alert.alert('Error', message);
+        } finally {
+            setWalletLoadingId(null);
+        }
+    };
+
     const renderItem = ({ item }: { item: ReportFile }) => {
         const isExpanded = true;
         // const isExpanded = expandedId === item.id;
@@ -226,6 +250,22 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                                 <Text className="text-white font-medium text-sm">Download</Text>
                             </TouchableOpacity> */}
                         </View>
+                        {item.type === 'png' && (
+                            <TouchableOpacity
+                                onPress={() => handleAddToWallet(item)}
+                                disabled={walletLoadingId === item.id}
+                                className="flex-row gap-2 mt-3 bg-teal py-3 rounded-xl items-center justify-center shadow-sm active:opacity-90"
+                            >
+                                {walletLoadingId === item.id ? (
+                                    <ActivityIndicator color="white" size="small" />
+                                ) : (
+                                    <>
+                                        <Wallet size={16} color="white" />
+                                        <Text className="text-white font-medium text-sm">Add to Google Wallet</Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        )}
                     </View>
                  
             </View>
