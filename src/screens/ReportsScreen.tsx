@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { X } from 'lucide-react-native';
+import { Wallet, X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, NativeModules, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -55,6 +55,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
     const [reports, setReports] = useState<ReportFile[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [walletLoadingId, setWalletLoadingId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchReports();
@@ -175,6 +176,53 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
         });
     };
 
+    const handleAddToGoogleWallet = async (file: ReportFile) => {
+        const result = await userService.getGoogleWalletPassForReport(file.id);
+        const saveUrl = result?.data?.save_url || result?.save_url;
+        if (!saveUrl) {
+            Alert.alert('Error', 'Could not get your Google Wallet pass. Please try again later.');
+            return;
+        }
+        await Linking.openURL(saveUrl);
+    };
+
+    const handleAddToAppleWallet = async (file: ReportFile) => {
+        const { WalletPassModule } = NativeModules;
+        if (!(await WalletPassModule.canAddPasses())) {
+            Alert.alert('Apple Wallet unavailable', 'Apple Wallet is not available on this device.');
+            return;
+        }
+        const result = await userService.getApplePassForReport(file.id);
+        const passBase64 = result?.data?.pass_base64 || result?.pass_base64;
+        if (!passBase64) {
+            Alert.alert('Error', 'Could not get your Apple Wallet pass. Please try again later.');
+            return;
+        }
+        await WalletPassModule.addPass(passBase64);
+    };
+
+    const handleAddToWallet = async (file: ReportFile) => {
+        if (walletLoadingId) return;
+        setWalletLoadingId(file.id);
+        const walletName = Platform.OS === 'ios' ? 'Apple Wallet' : 'Google Wallet';
+        try {
+            if (Platform.OS === 'ios') {
+                await handleAddToAppleWallet(file);
+            } else {
+                await handleAddToGoogleWallet(file);
+            }
+        } catch (error: any) {
+            console.error(`Add to ${walletName} failed`, error);
+            const message =
+                error.response?.status === 404
+                    ? `Your ${walletName} pass is not available for this report yet.`
+                    : error.response?.data?.message || error.message || `Could not add to ${walletName}. Please try again later.`;
+            Alert.alert('Error', message);
+        } finally {
+            setWalletLoadingId(null);
+        }
+    };
+
     const renderItem = ({ item }: { item: ReportFile }) => {
         const isExpanded = true;
         // const isExpanded = expandedId === item.id;
@@ -226,6 +274,22 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                                 <Text className="text-white font-medium text-sm">Download</Text>
                             </TouchableOpacity> */}
                         </View>
+                        {item.type === 'png' && (
+                            <TouchableOpacity
+                                onPress={() => handleAddToWallet(item)}
+                                disabled={walletLoadingId === item.id}
+                                className="flex-row gap-2 mt-3 bg-teal py-3 rounded-xl items-center justify-center shadow-sm active:opacity-90"
+                            >
+                                {walletLoadingId === item.id ? (
+                                    <ActivityIndicator color="white" size="small" />
+                                ) : (
+                                    <>
+                                        <Wallet size={16} color="white" />
+                                        <Text className="text-white font-medium text-sm">{Platform.OS === 'ios' ? 'Add to Apple Wallet' : 'Add to Google Wallet'}</Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        )}
                     </View>
                  
             </View>
