@@ -76,5 +76,15 @@ export const userService = {
     });
     return response.data;
   },
+
+  // Builds a signed Apple Wallet pass for a report. Response shape:
+  // { status: 200, data: { pass_base64 } } — base64 of the .pkpass file.
+  // Spec for the backend: docs/apple-wallet-backend-spec.md
+  getApplePassForReport: async (reportId: string) => {
+    const response = await api.get('/api/wallet/apple-pass-report', {
+      params: { report_id: reportId },
+    });
+    return response.data;
+  },
 };
 

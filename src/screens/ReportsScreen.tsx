@@ -1,7 +1,7 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Wallet, X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Linking, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, NativeModules, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
@@ -176,23 +176,47 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
         });
     };
 
+    const handleAddToGoogleWallet = async (file: ReportFile) => {
+        const result = await userService.getGoogleWalletPassForReport(file.id);
+        const saveUrl = result?.data?.save_url || result?.save_url;
+        if (!saveUrl) {
+            Alert.alert('Error', 'Could not get your Google Wallet pass. Please try again later.');
+            return;
+        }
+        await Linking.openURL(saveUrl);
+    };
+
+    const handleAddToAppleWallet = async (file: ReportFile) => {
+        const { WalletPassModule } = NativeModules;
+        if (!(await WalletPassModule.canAddPasses())) {
+            Alert.alert('Apple Wallet unavailable', 'Apple Wallet is not available on this device.');
+            return;
+        }
+        const result = await userService.getApplePassForReport(file.id);
+        const passBase64 = result?.data?.pass_base64 || result?.pass_base64;
+        if (!passBase64) {
+            Alert.alert('Error', 'Could not get your Apple Wallet pass. Please try again later.');
+            return;
+        }
+        await WalletPassModule.addPass(passBase64);
+    };
+
     const handleAddToWallet = async (file: ReportFile) => {
         if (walletLoadingId) return;
         setWalletLoadingId(file.id);
+        const walletName = Platform.OS === 'ios' ? 'Apple Wallet' : 'Google Wallet';
         try {
-            const result = await userService.getGoogleWalletPassForReport(file.id);
-            const saveUrl = result?.data?.save_url || result?.save_url;
-            if (!saveUrl) {
-                Alert.alert('Error', 'Could not get your Google Wallet pass. Please try again later.');
-                return;
+            if (Platform.OS === 'ios') {
+                await handleAddToAppleWallet(file);
+            } else {
+                await handleAddToGoogleWallet(file);
             }
-            await Linking.openURL(saveUrl);
         } catch (error: any) {
-            console.error('Add to Google Wallet failed', error);
+            console.error(`Add to ${walletName} failed`, error);
             const message =
                 error.response?.status === 404
-                    ? 'Could not find this report. Please try again later.'
-                    : error.response?.data?.message || 'Could not add to Google Wallet. Please try again later.';
+                    ? `Your ${walletName} pass is not available for this report yet.`
+                    : error.response?.data?.message || error.message || `Could not add to ${walletName}. Please try again later.`;
             Alert.alert('Error', message);
         } finally {
             setWalletLoadingId(null);
@@ -261,7 +285,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                                 ) : (
                                     <>
                                         <Wallet size={16} color="white" />
-                                        <Text className="text-white font-medium text-sm">Add to Google Wallet</Text>
+                                        <Text className="text-white font-medium text-sm">{Platform.OS === 'ios' ? 'Add to Apple Wallet' : 'Add to Google Wallet'}</Text>
                                     </>
                                 )}
                             </TouchableOpacity>
