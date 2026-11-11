@@ -1,6 +1,7 @@
 import { ChevronLeft } from 'lucide-react-native';
 import React, { useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
+import { colors } from '../theme/colors';
 import { NotificationModal } from './NotificationModal';
 
 interface HeaderProps {
@@ -8,23 +9,25 @@ interface HeaderProps {
     onBack?: () => void;
     title?: string;
     subtitle?: string;
+    minimal?: boolean;
 }
 
-export const Header = ({ showBack, onBack, title, subtitle }: HeaderProps) => {
+export const Header = ({ showBack, onBack, title, subtitle, minimal }: HeaderProps) => {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
   return (
     <>
-      <View className="flex-row justify-center items-center px-5 py-3 bg-white border-b border-gray-100 relative min-h-[60px]">
+      <View className={`flex-row justify-center items-center px-5 py-3 bg-white relative min-h-[60px] ${minimal ? '' : 'border-b border-gray-100'}`}>
         {showBack && (
             <TouchableOpacity 
                 onPress={onBack}
-                className="absolute left-5 z-10 p-2 rounded-full bg-gray-50 active:bg-gray-100"
+                className={minimal ? 'absolute left-3 z-10 p-2' : 'absolute left-5 z-10 p-2 rounded-full bg-gray-50 active:bg-gray-100'}
             >
-                <ChevronLeft size={24} color="#1f2937" />
+                <ChevronLeft size={minimal ? 28 : 24} color={minimal ? colors['text-primary'] : '#1f2937'} />
             </TouchableOpacity>
         )}
 
+        {!minimal && (
         <View className="items-center justify-center">
             {title ? (
                 <>
@@ -37,6 +40,7 @@ export const Header = ({ showBack, onBack, title, subtitle }: HeaderProps) => {
                 <Text className="text-primary font-bold text-2xl tracking-[0.2em] font-modern">FLAHY</Text>
             )}
         </View>
+        )}
 
       </View>
 
