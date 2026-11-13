@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { FileText, Paperclip, Send, Shield, X } from 'lucide-react-native';
+import { ArrowUp, FileText, Plus, Shield, X } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -507,7 +507,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
 
   // Scroll on new messages
   useEffect(() => {
-    if (messages.length > 1) {
+    if (messages.length > 0) {
       setTimeout(() => scrollToBottom(true), 150);
     }
   }, [messages.length]);
@@ -538,11 +538,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     try {
       const token = useAuthStore.getState().token;
       if (!token) {
-        setGreetingMessage({
-          id: 'greeting',
-          role: 'assistant',
-          content: 'Hello! I am FlahyAI. How can I help you today?',
-        });
         return;
       }
 
@@ -553,12 +548,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       const reports = listResponse.data?.data;
 
       if (!reports || reports.length === 0) {
-        setGreetingMessage({
-          id: 'greeting',
-          role: 'assistant',
-          content:
-            'Hello! I am FlahyAI. You have no uploaded reports yet. You can still ask me health-related questions!',
-        });
         return;
       }
 
@@ -753,20 +742,8 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         hasText: !!reportTextRef.current,
         textLen: reportTextRef.current?.length ?? 0,
       });
-
-      // 3. Show generic greeting (reports loaded silently in background)
-      setGreetingMessage({
-        id: 'greeting',
-        role: 'assistant',
-        content: 'Hello! I am FlahyAI. How can I help you today?',
-      });
     } catch (error: any) {
       console.error('Failed to load reports:', error?.message);
-      setGreetingMessage({
-        id: 'greeting',
-        role: 'assistant',
-        content: 'Hello! I am FlahyAI. How can I help you today?',
-      });
     } finally {
       setIsInitializing(false);
     }
@@ -1139,7 +1116,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
 
   return (
     <ScreenWrapper
-      className="flex-1 bg-background"
+      className="flex-1 bg-card"
       edges={Platform.OS === 'android' ? ['top'] : ['top', 'bottom']}
     >
       {/* AI Data Consent Modal */}
@@ -1443,12 +1420,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         </View>
       </Modal>
 
-      <Header
-        showBack={true}
-        onBack={() => navigation.goBack()}
-        title="FlahyAI"
-        subtitle="Your Personal Health AI"
-      />
+      <Header showBack={true} onBack={() => navigation.goBack()} minimal />
 
       {isInitializing ? (
         <View
@@ -1500,7 +1472,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
       ) : (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
+          keyboardVerticalOffset={0}
           style={{ flex: 1 }}
         >
           <View className="flex-1 px-4">
@@ -1508,7 +1480,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               ref={flatListRef}
               data={messages}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingTop: 12, paddingBottom: 120 }}
+              contentContainerStyle={{ paddingTop: 8, paddingBottom: 16 }}
               onLayout={e => {
                 layoutHeightRef.current = e.nativeEvent.layout.height;
               }}
@@ -1520,7 +1492,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               }}
               keyboardShouldPersistTaps="handled"
               ListFooterComponent={
-                messages.length < 3 ? (
+                storeMessages.length < 2 ? (
                   <View className="mt-6">
                     <Text className="mb-3 ml-1 text-sm font-medium text-text-secondary">
                       Suggestions
@@ -1530,10 +1502,10 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                         <TouchableOpacity
                           key={s.id}
                           onPress={() => handleSuggestionPress(s.text)}
-                          className="flex-row gap-2 items-center px-4 py-2 bg-white rounded-full border border-gray-100 shadow-sm"
+                          className="flex-row gap-2 items-center px-4 py-2.5 bg-surface rounded-full"
                         >
-                          <s.icon size={14} color={colors.primary} />
-                          <Text className="text-sm font-medium text-primary">
+                          <s.icon size={16} color={colors['text-primary']} />
+                          <Text className="text-[15px] text-text-primary">
                             {s.text}
                           </Text>
                         </TouchableOpacity>
@@ -1548,21 +1520,12 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                     item.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {item.role === 'assistant' && (
-                    <View className="justify-center items-center mr-2 ml-1 w-8 h-8 bg-white rounded-full border border-gray-100 shadow-sm">
-                      <Image
-                        source={require('../assets/flahy_icon.png')}
-                        style={{ width: 20, height: 20 }}
-                        resizeMode="contain"
-                      />
-                    </View>
-                  )}
                   <View
-                    className={`px-5 py-3.5 max-w-[80%] shadow-sm ${
+                    className={
                       item.role === 'user'
-                        ? 'bg-primary rounded-2xl rounded-tr-sm'
-                        : 'bg-white border border-gray-100 rounded-2xl rounded-tl-sm'
-                    }`}
+                        ? 'px-4 py-2.5 max-w-[80%] rounded-3xl bg-surface'
+                        : 'flex-1 py-1'
+                    }
                   >
                     {item.role === 'assistant' ? (
                       <>
@@ -1596,7 +1559,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                           />
                         )}
                         {item.content ? (
-                          <Text className="text-base leading-6 text-white">
+                          <Text style={md.userText}>
                             {item.content}
                           </Text>
                         ) : null}
@@ -1636,42 +1599,42 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 style={inputStyles.iconCircle}
                 onPress={handleAttachPress}
               >
-                <Paperclip size={20} color={colors.primary} />
+                <Plus size={24} color={colors['text-primary']} />
               </TouchableOpacity>
-              <View style={inputStyles.inputWrap}>
-                <TextInput
-                  value={inputText}
-                  onChangeText={setInputText}
-                  placeholder="Message FlahyAI..."
-                  placeholderTextColor={colors['text-secondary']}
-                  style={inputStyles.textInput}
-                  textAlignVertical="center"
-                  multiline
-                />
-              </View>
-              <TouchableOpacity
-                onPress={() => sendMessage()}
-                disabled={isLoading || (!inputText.trim() && !pendingAttachment)}
-                style={[
-                  inputStyles.sendBtn,
-                  isLoading || (!inputText.trim() && !pendingAttachment)
-                    ? inputStyles.sendBtnDisabled
-                    : inputStyles.sendBtnActive,
-                ]}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color={colors.primary} size="small" />
-                ) : (
-                  <Send
-                    size={18}
-                    color={
-                      !inputText.trim() && !pendingAttachment
-                        ? colors['text-secondary']
-                        : 'white'
-                    }
+              <View style={inputStyles.pill}>
+                <View style={inputStyles.inputWrap}>
+                  <TextInput
+                    value={inputText}
+                    onChangeText={setInputText}
+                    placeholder="Ask FlahyAI"
+                    placeholderTextColor={colors['text-secondary']}
+                    style={[
+                      inputStyles.textInput,
+                      // iOS keeps the old multiline height when the value is
+                      // cleared programmatically, so pin it while empty.
+                      Platform.OS === 'ios' && !inputText && inputStyles.textInputEmpty,
+                    ]}
+                    textAlignVertical="center"
+                    multiline
                   />
-                )}
-              </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  onPress={() => sendMessage()}
+                  disabled={isLoading || (!inputText.trim() && !pendingAttachment)}
+                  style={[
+                    inputStyles.sendBtn,
+                    isLoading || (!inputText.trim() && !pendingAttachment)
+                      ? inputStyles.sendBtnDisabled
+                      : inputStyles.sendBtnActive,
+                  ]}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color={colors['text-primary']} size="small" />
+                  ) : (
+                    <ArrowUp size={20} color="white" strokeWidth={2.5} />
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -1686,8 +1649,13 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
 const md = StyleSheet.create({
   body: {
     color: colors['text-primary'],
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 17,
+    lineHeight: 25,
+  },
+  userText: {
+    color: colors['text-primary'],
+    fontSize: 17,
+    lineHeight: 24,
   },
   bold: {
     fontWeight: 'bold',
@@ -1696,7 +1664,7 @@ const md = StyleSheet.create({
     fontStyle: 'italic',
   },
   inlineCode: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: colors.surface,
     borderRadius: 4,
     paddingHorizontal: 4,
     paddingVertical: 1,
@@ -1709,21 +1677,21 @@ const md = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   h1: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: 'bold',
     marginTop: 8,
     marginBottom: 4,
     color: colors['text-primary'],
   },
   h2: {
-    fontSize: 19,
+    fontSize: 21,
     fontWeight: 'bold',
     marginTop: 6,
     marginBottom: 4,
     color: colors['text-primary'],
   },
   h3: {
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: '600',
     marginTop: 4,
     marginBottom: 2,
@@ -1733,7 +1701,7 @@ const md = StyleSheet.create({
     marginBottom: 6,
   },
   codeBlock: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.surface,
     borderRadius: 8,
     padding: 12,
     marginVertical: 8,
@@ -1751,8 +1719,8 @@ const md = StyleSheet.create({
   },
   bullet: {
     color: colors['text-secondary'],
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 17,
+    lineHeight: 25,
     width: 18,
     textAlign: 'center',
   },
@@ -1760,7 +1728,7 @@ const md = StyleSheet.create({
     flex: 1,
   },
   blockquote: {
-    backgroundColor: '#f9f9f9',
+    backgroundColor: colors.surface,
     borderLeftWidth: 3,
     borderLeftColor: colors.primary,
     paddingLeft: 12,
@@ -1769,40 +1737,40 @@ const md = StyleSheet.create({
   },
   hr: {
     height: 1,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: colors.border,
     marginVertical: 12,
   },
 });
 
 const inputStyles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
+    paddingTop: 6,
     paddingBottom: 8,
   },
   bar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    padding: 8,
-    borderRadius: 32,
-    borderWidth: 1,
-    borderColor: '#f3f4f6',
-    marginBottom: 8,
-    // shadow
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
+    gap: 8,
   },
   iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f9fafb',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  pill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    minHeight: 48,
+    paddingLeft: 18,
+    paddingRight: 6,
+    paddingVertical: 6,
+    borderRadius: 24,
+    backgroundColor: colors.surface,
   },
   attachmentPreviewRow: {
     position: 'relative',
@@ -1830,32 +1798,30 @@ const inputStyles = StyleSheet.create({
   },
   inputWrap: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 7,
+    paddingRight: 8,
     justifyContent: 'center',
   },
   textInput: {
     color: colors['text-primary'],
-    fontSize: 16,
-    maxHeight: 96,
+    fontSize: 17,
+    maxHeight: 120,
     padding: 0,
   },
+  textInputEmpty: {
+    height: 22,
+  },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 2,
   },
   sendBtnDisabled: {
-    backgroundColor: '#f3f4f6',
+    backgroundColor: colors['surface-strong'],
   },
   sendBtnActive: {
-    backgroundColor: colors.primary,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
+    backgroundColor: colors.teal,
   },
 });
