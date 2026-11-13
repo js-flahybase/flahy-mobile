@@ -17,7 +17,9 @@ module.exports = {
             mint: "#E6F4F1",
             "text-primary": "#1B2C3F",
             "text-secondary": "#6C7074",
-            border: "#E2E8F0"
+            border: "#E2E8F0",
+            surface: "#F4F4F4",
+            "surface-strong": "#D9D9D9"
         },
         fontFamily: {
             system: ['System', 'sans-serif'],
