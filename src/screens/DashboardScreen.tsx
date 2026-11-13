@@ -567,34 +567,31 @@ export const DashboardScreen = () => {
           <View
             style={{ flexDirection: 'row', gap: GRID_GAP, marginBottom: 32 }}
           >
-            {/* FlahyAI — only show when user has a report */}
-            {hasReport && (
-              <TouchableOpacity
-                onPress={handleFlahyAI}
+            <TouchableOpacity
+              onPress={handleFlahyAI}
+              style={{
+                width: BTN_SIZE,
+                height: BTN_SIZE,
+                backgroundColor: colors.teal,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Sparkles size={28} color="white" />
+              <Text
                 style={{
-                  width: BTN_SIZE,
-                  height: BTN_SIZE,
-                  backgroundColor: colors.teal,
-                  borderRadius: 12,
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  color: 'white',
+                  fontWeight: '500',
+                  fontSize: 12,
+                  marginTop: 6,
                 }}
+                numberOfLines={1}
+                adjustsFontSizeToFit
               >
-                <Sparkles size={28} color="white" />
-                <Text
-                  style={{
-                    color: 'white',
-                    fontWeight: '500',
-                    fontSize: 12,
-                    marginTop: 6,
-                  }}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                >
-                  FlahyAI
-                </Text>
-              </TouchableOpacity>
-            )}
+                FlahyAI
+              </Text>
+            </TouchableOpacity>
 
             {/* Upload */}
             <TouchableOpacity
