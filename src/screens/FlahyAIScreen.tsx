@@ -439,7 +439,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     null,
   );
   const [streamingContent, setStreamingContent] = useState('');
-  const [greetingMessage, setGreetingMessage] = useState<Message | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
 
   const [inputText, setInputText] = useState('');
@@ -449,9 +448,8 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   const contentHeightRef = useRef(0);
   const layoutHeightRef = useRef(0);
 
-  // Merge: local greeting + store messages (with streaming overlay)
+  // Store messages (with streaming overlay)
   const messages: Message[] = [
-    ...(greetingMessage ? [greetingMessage] : []),
     ...storeMessages.map(m => {
       if (m.id === streamingMessageId) {
         return {
@@ -1206,10 +1204,12 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                   lineHeight: 22,
                 }}
               >
-                Your data is sent to trusted third-party AI service providers
-                that provide the large language model (LLM) technology powering
-                FlahyAI. Your data is used solely to generate responses and
-                health-related insights within FlahyAI.
+                Your data is sent to third-party AI service providers whose
+                large language models power FlahyAI. These models are aligned
+                to Flahy’s clinical logic: they work within Flahy’s
+                interpretation frameworks and guardrails rather than generating
+                open-ended responses. Your data is used solely to generate
+                responses and health-related insights within FlahyAI.
               </Text>
             </View>
 
