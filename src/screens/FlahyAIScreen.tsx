@@ -24,13 +24,18 @@ import ReactNativeBlobUtil from 'react-native-blob-util';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { Header } from '../components/Header';
 import { ScreenWrapper } from '../components/ScreenWrapper';
-import { API_BASE_URL, patientApiRoutes, WEB_APP_URL } from '../config';
+import { API_BASE_URL, WEB_APP_URL, patientApiRoutes } from '../config';
 import { RootStackParamList } from '../navigation/types';
 import api from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useChatStore } from '../store/chatStore';
-import { FLAHY_AI_SYSTEM_PROMPT } from '../constants/flahyAIPrompt';
 import { colors } from '../theme/colors';
+
+// NOTE: FLAHY_AI_SYSTEM_PROMPT (constants/flahyAIPrompt.ts) is no longer used
+// anywhere in this screen - the backend (flahybase-api-web-app) now owns the
+// system prompt and all report extraction. If nothing else in the app imports
+// constants/flahyAIPrompt.ts, that file can be deleted. WEB_APP_URL is still
+// needed below, for the same /api/html-to-pdf conversion the web client uses.
 
 type Message = {
   id: string;
@@ -250,58 +255,25 @@ function MarkdownText({ content }: { content: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// AI SDK data stream parser
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a single SSE line. The server sends:
- *   data: {"type":"text-delta","delta":"Hi"}
- * Returns the delta text or null.
- */
-function parseSSELine(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('data: ')) return null;
-
-  try {
-    const json = JSON.parse(trimmed.slice(6));
-    if (json.type === 'text-delta' && typeof json.delta === 'string') {
-      return json.delta;
-    }
-  } catch {
-    // skip malformed lines
-  }
-  return null;
-}
-
-/**
- * Parse a full SSE response text into concatenated content.
- */
-function parseSSEResponse(text: string): string {
-  return text.split('\n').map(parseSSELine).filter(Boolean).join('');
-}
-
-// ---------------------------------------------------------------------------
 // Screen component
 // ---------------------------------------------------------------------------
 
 type Props = NativeStackScreenProps<RootStackParamList, 'FlahyAI'>;
 
-type ReportFile = {
-  base64: string;
-  mediaType: string;
-  filename: string;
-};
+// Cap on how many of the user's reports get silently preloaded into the
+// session on open - not "all of them" literally (a long-time user could have
+// dozens, and every one is a real upload+extraction on the backend before the
+// user has typed anything), just a sane ceiling. Matches the web client's
+// MAX_PREATTACHED_REPORTS.
+const MAX_PRELOADED_REPORTS = 20;
 
-// Only one report is ever sent to the AI (see loadReports), so this can
-// safely be generous without ballooning the request size. This is a safety
-// cap against a truly pathological report, not an expected truncation point.
-const MAX_REPORT_TEXT_CHARS = 100000;
-// Cap how many reports get their full binary (PDF/image) sent to the AI.
-// Every message resends the whole conversation including these attachments,
-// so keeping this low is what keeps replies fast. All reports still
-// contribute their text content (see textSections) regardless of this cap.
-const MAX_FILE_ATTACHMENTS = 2;
-
+// Only used to name the uploaded file sensibly (and give the upload a
+// plausible `type`) - the backend's real extraction pipeline (not this
+// client) decides what kind of report it is and how to read it, EXCEPT for
+// the JSON/HTML special cases below, which must match the web client's
+// handling exactly (see createFileFromReportId in useFlahyAiRuntime.js) -
+// uploading those two report types differently is what caused mobile and
+// web to give different answers off the same reports.
 function getMimeTypeFromName(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   if (ext === 'pdf') return 'application/pdf';
@@ -328,62 +300,6 @@ function pickHeader(
   return undefined;
 }
 
-// Base64 -> UTF-8 string. Uses global.atob (available in RN 0.71+).
-function decodeBase64Utf8(b64: string): string {
-  try {
-    const atobFn = (globalThis as any).atob as
-      | ((s: string) => string)
-      | undefined;
-    // atob decodes base64 to a binary string; each char code is a byte.
-    const binary = typeof atobFn === 'function' ? atobFn(b64) : '';
-    if (!binary) return '';
-    // Decode UTF-8 manually — TextDecoder is not reliably available in RN.
-    let out = '';
-    let i = 0;
-    while (i < binary.length) {
-      const c = binary.charCodeAt(i++);
-      if (c < 0x80) {
-        out += String.fromCharCode(c);
-      } else if (c < 0xe0 && i < binary.length) {
-        const c2 = binary.charCodeAt(i++);
-        out += String.fromCharCode(((c & 0x1f) << 6) | (c2 & 0x3f));
-      } else if (i + 1 < binary.length) {
-        const c2 = binary.charCodeAt(i++);
-        const c3 = binary.charCodeAt(i++);
-        out += String.fromCharCode(
-          ((c & 0x0f) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f),
-        );
-      }
-    }
-    return out;
-  } catch {
-    return '';
-  }
-}
-
-function htmlToPlainText(html: string): string {
-  return String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_REPORT_TEXT_CHARS);
-}
-
-function jsonToReportText(jsonText: string): string {
-  try {
-    const parsed = JSON.parse(jsonText);
-    return JSON.stringify(parsed, null, 2).slice(0, MAX_REPORT_TEXT_CHARS);
-  } catch {
-    return String(jsonText || '').slice(0, MAX_REPORT_TEXT_CHARS);
-  }
-}
-
 function looksLikeHtml(sample: string): boolean {
   const normalized = sample.trimStart().toLowerCase();
   return (
@@ -400,7 +316,101 @@ function looksLikeJson(sample: string): boolean {
   return trimmed.startsWith('{') || trimmed.startsWith('[');
 }
 
+// Mirrors the web client's htmlBlobToPdfFile() - same /api/html-to-pdf route
+// on WEB_APP_URL (this Next.js endpoint, not the AdonisJS backend), same
+// request shape. Returns the PDF's base64, ready for uploadFlahyAiFile().
+async function convertHtmlToPdfBase64(html: string): Promise<string> {
+  const res = await ReactNativeBlobUtil.fetch(
+    'POST',
+    `${WEB_APP_URL}/api/html-to-pdf`,
+    { 'Content-Type': 'application/json' },
+    JSON.stringify({ html }),
+  );
+  const status = (res as any).respInfo?.status;
+  if (status && status >= 400) {
+    throw new Error(`HTML->PDF conversion failed (${status})`);
+  }
+  return res.base64();
+}
+
 const AI_CONSENT_KEY = 'flahy_ai_consent_accepted';
+
+// ---------------------------------------------------------------------------
+// FlahyAI backend client (session / upload / chat) - mirrors the web app's
+// src/hooks/useFlahyAiRuntime.js against the SAME flahybase-api-web-app
+// routes (API_BASE_URL is already this backend - it's what patientApiRoutes
+// hits for reports). No streaming: /chat returns one JSON {reply}.
+//
+// Uploads use react-native-blob-util's multipart form (an array of
+// {name, data} / {name, filename, type, data} parts) instead of the DOM
+// FormData/File web uses - that's not reliably available in React Native,
+// and this screen already depends on ReactNativeBlobUtil for downloads.
+// ---------------------------------------------------------------------------
+
+// Uses the shared `api` axios instance (not ReactNativeBlobUtil) - it's a
+// plain no-body POST, so it gets the app's normal auth-header/401/network-error
+// handling for free. Upload/chat below still need ReactNativeBlobUtil because
+// they send multipart file data.
+async function createFlahyAiSession(): Promise<string> {
+  const res = await api.post('/api/flahyai/session');
+  const sessionId = res.data?.session_id;
+  if (!sessionId) {
+    throw new Error(res.data?.error || 'Failed to create FlahyAI session');
+  }
+  return sessionId as string;
+}
+
+async function uploadFlahyAiFile(
+  token: string | null,
+  sessionId: string,
+  file: { base64: string; mediaType: string; filename: string },
+): Promise<void> {
+  const res = await ReactNativeBlobUtil.fetch(
+    'POST',
+    `${API_BASE_URL}/api/flahyai/upload`,
+    {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'Content-Type': 'multipart/form-data',
+    },
+    [
+      { name: 'session_id', data: sessionId },
+      {
+        name: 'files',
+        filename: file.filename,
+        type: file.mediaType,
+        data: file.base64,
+      },
+    ],
+  );
+  const data = JSON.parse(res.text());
+  if (data?.error) {
+    throw new Error(data.error);
+  }
+}
+
+async function sendFlahyAiChat(
+  token: string | null,
+  sessionId: string,
+  message: string,
+): Promise<string> {
+  const res = await ReactNativeBlobUtil.fetch(
+    'POST',
+    `${API_BASE_URL}/api/flahyai/chat`,
+    {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'Content-Type': 'multipart/form-data',
+    },
+    [
+      { name: 'session_id', data: sessionId },
+      { name: 'message', data: message },
+    ],
+  );
+  const data = JSON.parse(res.text());
+  if (data?.error) {
+    throw new Error(data.error);
+  }
+  return data?.reply || '';
+}
 
 export const FlahyAIScreen = ({ navigation }: Props) => {
   // ---- AI Data Consent ----
@@ -435,10 +445,13 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   } = useChatStore.getState();
 
   // ---- Local transient state (not persisted) ----
+  // Tracks the one assistant message currently awaiting its single JSON
+  // reply from /api/flahyai/chat (there's no streaming to accumulate here -
+  // its content in the store stays '' until the reply arrives, which is what
+  // renderItem below treats as "Thinking...").
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
     null,
   );
-  const [streamingContent, setStreamingContent] = useState('');
   const [isInitializing, setIsInitializing] = useState(false);
 
   const [inputText, setInputText] = useState('');
@@ -455,7 +468,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         return {
           id: m.id,
           role: m.role,
-          content: streamingContent,
+          content: m.content,
           isStreaming: true,
         };
       }
@@ -463,20 +476,18 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     }),
   ];
 
-  // All of the user's report files (PDF/image ones) — attached to the first
-  // user message (same as web), one `file` part per report.
-  const reportFilesRef = useRef<ReportFile[]>([]);
-  // Combined text of all HTML/JSON/plain-text reports — injected as REPORT_TEXT
-  // in the system prompt, one section per report.
-  const reportTextRef = useRef<string | null>(null);
+  // The backend session id - created lazily on first use (mirrors
+  // ensureSession() in the web hook) and kept for the lifetime of this screen.
+  // All of the user's reports and chat history live server-side against this
+  // id, so (unlike the old /api/chat flow) nothing needs to be resent on
+  // every turn.
+  const sessionIdRef = useRef<string | null>(null);
+  const ensureSession = async (): Promise<string> => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    sessionIdRef.current = await createFlahyAiSession();
+    return sessionIdRef.current;
+  };
 
-  // In-memory cache of base64 for user-attached photos, keyed by message id.
-  // Deliberately NOT persisted — cleared on app restart so we never resend a
-  // stale/oversized image blob, but stays available for follow-up questions
-  // within the same live session.
-  const attachmentCacheRef = useRef<Map<string, { base64: string; mediaType: string }>>(
-    new Map(),
-  );
   const [pendingAttachment, setPendingAttachment] = useState<{
     uri: string;
     mediaType: string;
@@ -526,6 +537,20 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     loadReports();
   }, []);
 
+  // Silently preload every one of the user's reports into the backend session
+  // as soon as the screen opens - mirrors the web client's
+  // createFilesFromAllReports()+uploadFileToSession() exactly: no client-side
+  // parsing, just hand the backend's real /api/flahyai/upload pipeline the
+  // raw bytes and let it classify/extract (blood, genetic, HTML, PDF, image)
+  // server-side. The chat reply is now what tells the user what was found, so
+  // there's no need to echo any "reports loaded" summary here.
+  //
+  // NOTE: uses patientApiRoutes.getFlahyReports (the SAME listing the web
+  // app's dashboard uses to decide "does this user have reports") - NOT
+  // patientApiRoutes.reportList, which is the lab-ordered/sample-linked
+  // listing used for admin/lab tooling and requires a sample_id. A report the
+  // user uploaded themselves has no sample_id and would silently never show
+  // up via reportList - exactly the bug this was fixed for on web.
   const loadReports = async () => {
     setIsInitializing(true);
     try {
@@ -534,65 +559,23 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         return;
       }
 
-      // 1. Fetch report list
-      const listResponse = await api.get(
-        `${patientApiRoutes.reportList}?page=1&limit=10`,
-      );
+      const listResponse = await api.get(patientApiRoutes.getFlahyReports);
       const reports = listResponse.data?.data;
-
       if (!reports || reports.length === 0) {
         return;
       }
 
-      // Reset any previous report context
-      reportFilesRef.current = [];
-      reportTextRef.current = null;
-      const textSections: string[] = [];
-
-      // Group reports by person (backend may return multiple people's
-      // reports, e.g. a family account). For each of up to 2 people, prefer
-      // their HTML report if they have one — its full text is extracted for
-      // the AI — and only fall back to their newest report of any other
-      // type if none of their reports are HTML. File names can't be trusted
-      // to tell HTML apart from PDF, so the downloaded content is checked.
-      const personKey = (r: any) =>
-        [r.first_name, r.middle_name, r.last_name]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-
-      const personOrder: string[] = [];
-      const personGroups = new Map<string, any[]>();
-      for (const r of reports) {
-        const key = personKey(r) || `_report_${r.id}`;
-        if (!personGroups.has(key)) {
-          personOrder.push(key);
-          personGroups.set(key, []);
-        }
-        personGroups.get(key)!.push(r);
-      }
-
-      for (const key of personOrder.slice(0, 2)) {
-      const personReports = personGroups.get(key)!;
-      let usedHtmlForPerson = false;
-      let applyFallback: (() => void) | null = null;
-      for (let i = 0; i < personReports.length && !usedHtmlForPerson; i++) {
-        const reportMeta = personReports[i];
-        const personName = personKey(reportMeta);
+      await ensureSession();
+      let uploaded = 0;
+      for (const reportMeta of reports.slice(0, MAX_PRELOADED_REPORTS)) {
         const fileName: string =
-          reportMeta.file_name ||
-          (personName ? `${personName} report` : `report-${reportMeta.id}`);
-        const reportLabel = personName
-          ? `${fileName} (${personName})`
-          : fileName;
+          reportMeta.file_name || `report-${reportMeta.id}`;
         try {
           const downloadUrl = `${API_BASE_URL}${patientApiRoutes.downloadReport}/${reportMeta.id}`;
           const downloadResponse = await ReactNativeBlobUtil.fetch(
             'GET',
             downloadUrl,
-            {
-              Authorization: `Bearer ${token}`,
-            },
+            { Authorization: `Bearer ${token}` },
           );
 
           const respHeaders = (downloadResponse as any).respInfo?.headers;
@@ -602,139 +585,58 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
               '',
           );
           const nameCT = normalizeContentType(getMimeTypeFromName(fileName));
-          let effectiveCT = headerCT || nameCT;
+          const effectiveCT = headerCT || nameCT;
 
-          // Read as text if the content-type or filename hints at text; sniff a 2KB
-          // sample before committing so a misreported content-type can't strand the AI
-          // with a useless binary payload.
-          const maybeText =
-            effectiveCT === 'text/html' ||
-            effectiveCT === 'application/json' ||
-            effectiveCT.startsWith('text/') ||
-            !effectiveCT ||
-            effectiveCT === 'application/octet-stream';
+          let sample = '';
+          try {
+            sample = ((downloadResponse as any).text?.() ?? '').slice(0, 2048);
+          } catch {
+            // binary content - sniffing just won't match HTML/JSON, which is correct
+          }
 
-          let textContent: string | null = null;
-          if (maybeText) {
+          // Same precedence as the web client's createFileFromReportId(): JSON
+          // first, then HTML, then upload as-is. A JSON report is skipped
+          // entirely (not uploaded) to match web's current behavior exactly -
+          // this is a known gap (see the standing note to the user about it),
+          // not an intentional design choice, but matching it is what keeps
+          // both clients giving the same answer for the same reports.
+          if (effectiveCT === 'application/json' || looksLikeJson(sample)) {
+            console.log(`[FlahyAI] skipping JSON report "${fileName}" (not uploaded, matches web)`);
+            continue;
+          }
+
+          if (effectiveCT === 'text/html' || looksLikeHtml(sample)) {
             try {
-              const raw: string = (downloadResponse as any).text?.() ?? '';
-              if (raw) textContent = raw;
-            } catch (err) {
-              console.warn(
-                'downloadResponse.text() failed, falling back to base64 decode:',
-                err,
-              );
-            }
-            if (!textContent) {
-              const b64 = downloadResponse.base64();
-              const decoded = decodeBase64Utf8(b64);
-              if (decoded) textContent = decoded;
-            }
-          }
-
-          // If sniff identifies HTML/JSON, override a lying/missing content-type.
-          if (textContent) {
-            const sample = textContent.slice(0, 2048);
-            if (effectiveCT !== 'text/html' && looksLikeHtml(sample))
-              effectiveCT = 'text/html';
-            else if (
-              effectiveCT !== 'application/json' &&
-              looksLikeJson(sample)
-            )
-              effectiveCT = 'application/json';
-          }
-
-          const applyReport = () => {
-            if (effectiveCT === 'text/html' && textContent) {
-              // Expose the report as REPORT_TEXT — this captures the full
-              // text content of the report. We deliberately do NOT also
-              // attach a converted PDF here: it's redundant with the text
-              // above (same content, no extra info the AI doesn't already
-              // have) and was the single biggest contributor to oversized
-              // chat requests that failed outright (a converted report PDF
-              // alone measured ~5MB, likely exceeding the backend's request
-              // size limit).
-              const plain = htmlToPlainText(textContent);
-              if (plain)
-                textSections.push(`--- Report: ${reportLabel} ---\n${plain}`);
-            } else if (effectiveCT === 'application/json' && textContent) {
-              const formatted = jsonToReportText(textContent);
-              if (formatted)
-                textSections.push(
-                  `--- Report: ${reportLabel} ---\n${formatted}`,
-                );
-            } else if (
-              effectiveCT === 'application/pdf' ||
-              effectiveCT.startsWith('image/')
-            ) {
-              if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
-                reportFilesRef.current.push({
-                  base64: downloadResponse.base64(),
-                  mediaType: effectiveCT,
-                  filename: fileName,
-                });
-              } else {
-                // Over the attachment cap and there's no text form of this
-                // report — at least tell the AI it exists by name.
-                textSections.push(
-                  `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
-                );
-              }
-            } else if (textContent) {
-              // Plain text or unrecognized text blob — still usable as REPORT_TEXT.
-              const trimmed = textContent
-                .trim()
-                .slice(0, MAX_REPORT_TEXT_CHARS);
-              if (trimmed)
-                textSections.push(
-                  `--- Report: ${reportLabel} ---\n${trimmed}`,
-                );
-            } else if (reportFilesRef.current.length < MAX_FILE_ATTACHMENTS) {
-              // Unknown binary — fall back to filename-based MIME as a best guess.
-              reportFilesRef.current.push({
-                base64: downloadResponse.base64(),
-                mediaType: nameCT,
-                filename: fileName,
+              const html = sample.length >= 2048 ? downloadResponse.text() : sample;
+              const pdfBase64 = await convertHtmlToPdfBase64(html);
+              await uploadFlahyAiFile(token, sessionIdRef.current as string, {
+                base64: pdfBase64,
+                mediaType: 'application/pdf',
+                filename: `${fileName.replace(/\.(html?|htm)$/i, '')}.pdf`,
               });
-            } else {
-              textSections.push(
-                `--- Report: ${reportLabel} --- (file not sent to keep replies fast; ask about this report by name if you need its details)`,
+              uploaded++;
+            } catch (err: any) {
+              // Matches the web client's fallback: if conversion fails, the
+              // report is skipped rather than uploaded as raw HTML.
+              console.error(
+                `HTML->PDF conversion failed for "${fileName}", skipping:`,
+                err?.message,
               );
             }
-          };
-
-          if (effectiveCT === 'text/html' && textContent) {
-            applyReport();
-            usedHtmlForPerson = true;
-          } else if (i === 0) {
-            // Newest report for this person isn't HTML: keep it as the
-            // fallback in case none of their other reports are HTML either.
-            applyFallback = applyReport;
+            continue;
           }
+
+          await uploadFlahyAiFile(token, sessionIdRef.current as string, {
+            base64: downloadResponse.base64(),
+            mediaType: effectiveCT,
+            filename: fileName,
+          });
+          uploaded++;
         } catch (err: any) {
-          console.error(
-            `Failed to load report "${fileName}":`,
-            err?.message,
-          );
+          console.error(`Failed to preload report "${fileName}":`, err?.message);
         }
       }
-
-      if (!usedHtmlForPerson && applyFallback) {
-        (applyFallback as () => void)();
-      }
-      }
-
-      if (textSections.length > 0) {
-        reportTextRef.current = textSections.join('\n\n');
-      }
-
-      console.log('[FlahyAI] reports loaded:', {
-        peopleCount: personOrder.slice(0, 2).length,
-        reportCount: reports.length,
-        filesAttached: reportFilesRef.current.length,
-        hasText: !!reportTextRef.current,
-        textLen: reportTextRef.current?.length ?? 0,
-      });
+      console.log('[FlahyAI] reports preloaded:', uploaded, 'of', reports.length);
     } catch (error: any) {
       console.error('Failed to load reports:', error?.message);
     } finally {
@@ -871,12 +773,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     };
 
     storeAddMessage(userMsg);
-    if (attachmentToSend) {
-      attachmentCacheRef.current.set(userMsgId, {
-        base64: attachmentToSend.base64,
-        mediaType: attachmentToSend.mediaType,
-      });
-    }
     setInputText('');
     setPendingAttachment(null);
     setIsLoading(true);
@@ -886,167 +782,37 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     try {
       const token = useAuthStore.getState().token;
 
-      // Add placeholder assistant message to store (empty — streaming fills it)
+      // Add placeholder assistant message to store - shown as "Thinking..."
+      // (see renderItem below) until the single reply below arrives. There's
+      // no streaming anymore: /api/flahyai/chat returns one JSON {reply}.
       storeAddMessage({ id: aiMsgId, role: 'assistant', content: '' });
       setStreamingMessageId(aiMsgId);
-      setStreamingContent('');
 
-      // Build messages in AI SDK v5 UIMessage format.
-      // Read latest store state to include the user message we just added.
-      const currentThread = useChatStore
-        .getState()
-        .threads.find(t => t.id === useChatStore.getState().currentThreadId);
-      const allMessages = currentThread?.messages ?? [];
+      const sessionId = await ensureSession();
 
-      const filteredMessages = allMessages.filter(
-        m =>
-          m.id !== aiMsgId && // skip the empty AI placeholder
-          (m.content || m.attachment) && // skip empty (unless it carries an attachment)
-          !m.content.startsWith('Error:') && // skip error messages
-          m.content !== 'No response received.' && // skip failed responses
-          m.content !== 'Thinking...', // skip placeholders
-      );
-
-      // Find the first user message index to attach the report files
-      const firstUserIdx = filteredMessages.findIndex(m => m.role === 'user');
-      const reports = reportFilesRef.current;
-
-      const apiMessages = filteredMessages.map((m, idx) => {
-        const parts: any[] = [{ type: 'text', text: m.content }];
-
-        // Attach every report file to the first user message (same as web)
-        if (idx === firstUserIdx && m.role === 'user') {
-          for (const report of reports) {
-            parts.push({
-              type: 'file',
-              mediaType: report.mediaType,
-              url: `data:${report.mediaType};base64,${report.base64}`,
-            });
-          }
-        }
-
-        // Attach a user-picked photo, if it's still in the in-memory cache
-        // (cleared on app restart — see attachmentCacheRef declaration).
-        if (m.role === 'user') {
-          const cachedAttachment = attachmentCacheRef.current.get(m.id);
-          if (cachedAttachment) {
-            parts.push({
-              type: 'file',
-              mediaType: cachedAttachment.mediaType,
-              url: `data:${cachedAttachment.mediaType};base64,${cachedAttachment.base64}`,
-            });
-          }
-        }
-
-        return { id: m.id, role: m.role, parts };
-      });
-
-      const reportText = reportTextRef.current;
-      const effectiveSystem = reportText
-        ? `${FLAHY_AI_SYSTEM_PROMPT}\n\nREPORT_TEXT:\n${reportText}`
-        : FLAHY_AI_SYSTEM_PROMPT;
-
-      const requestBody = JSON.stringify({
-        messages: apiMessages,
-        system: effectiveSystem,
-        tools: {},
-      });
-      console.log('[FlahyAI][perf] request payload size (bytes):', requestBody.length);
-      const requestStartedAt = Date.now();
-
-      const response = await fetch(`${WEB_APP_URL}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: requestBody,
-        // @ts-ignore — React Native specific option for text streaming
-        reactNative: { textStreaming: true },
-      });
-      console.log(
-        '[FlahyAI][perf] headers received after (ms):',
-        Date.now() - requestStartedAt,
-      );
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => 'Unknown error');
-        throw new Error(
-          `Server Error (${response.status}): ${errorBody.substring(0, 200)}`,
-        );
+      // Upload a freshly-picked photo first (same order as the web
+      // attachment adapter: upload, then the chat turn can see it) - the
+      // backend session remembers it from here on, so unlike the old
+      // /api/chat flow, nothing needs to be resent on every future turn.
+      if (attachmentToSend) {
+        await uploadFlahyAiFile(token, sessionId, {
+          base64: attachmentToSend.base64,
+          mediaType: attachmentToSend.mediaType,
+          filename: attachmentToSend.fileName || 'photo.jpg',
+        });
       }
 
-      // Streaming path — RN 0.71+ with textStreaming enabled
-      if (response.body && typeof response.body.getReader === 'function') {
-        const reader = response.body.getReader();
-        let firstChunkLogged = false;
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let fullContent = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          if (!firstChunkLogged) {
-            firstChunkLogged = true;
-            console.log(
-              '[FlahyAI][perf] first stream chunk after (ms):',
-              Date.now() - requestStartedAt,
-            );
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const delta = parseSSELine(line);
-            if (delta) {
-              fullContent += delta;
-              setStreamingContent(fullContent);
-            }
-          }
-        }
-
-        // Process remaining buffer
-        if (buffer) {
-          const delta = parseSSELine(buffer);
-          if (delta) {
-            fullContent += delta;
-          }
-        }
-
-        console.log(
-          '[FlahyAI][perf] full reply finished after (ms):',
-          Date.now() - requestStartedAt,
-        );
-
-        // Finalize: persist completed content to store, clear streaming state
-        storeUpdateMessage(aiMsgId, {
-          content: fullContent || 'No response received.',
-        });
-        setStreamingMessageId(null);
-        setStreamingContent('');
-      } else {
-        // Fallback: read full response then parse
-        const responseText = await response.text();
-        const aiContent = parseSSEResponse(responseText);
-
-        storeUpdateMessage(aiMsgId, {
-          content: aiContent || 'No response received.',
-        });
-        setStreamingMessageId(null);
-        setStreamingContent('');
-      }
+      const replyText = await sendFlahyAiChat(token, sessionId, msgText);
+      storeUpdateMessage(aiMsgId, {
+        content: replyText || 'No response received.',
+      });
     } catch (error: any) {
       console.error('FlahyAI Chat Error:', error);
       storeUpdateMessage(aiMsgId, {
         content: `Error: ${error?.message || 'Something went wrong.'}`,
       });
-      setStreamingMessageId(null);
-      setStreamingContent('');
     } finally {
+      setStreamingMessageId(null);
       setIsLoading(false);
     }
   };
@@ -1318,7 +1084,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 }}
                 onPress={() =>
                   Linking.openURL(
-                    'https://flahyhealth.com/privacy-policy-mobile',
+                    `${WEB_APP_URL}/privacy-policy-mobile`,
                   )
                 }
               >

@@ -3,6 +3,7 @@ import { LogOut } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Linking, Text, TouchableOpacity, View } from 'react-native';
 import { ScreenWrapper } from '../components/ScreenWrapper';
+import { WEB_APP_URL } from '../config';
 import { Product, productService } from '../services/productService';
 import { useAuthStore } from '../store/authStore';
 import { colors } from '../theme/colors';
@@ -104,7 +105,7 @@ export const SupplementScreen = () => {
                     <TouchableOpacity
                         className="bg-[#4FB5B0] py-4 rounded-xl items-center shadow-sm active:opacity-90"
                         onPress={() => {
-                            const productUrl = `https://flahyhealth.com/${item.slug}`;
+                            const productUrl = `${WEB_APP_URL}/${item.slug}`;
                             Linking.openURL(productUrl).catch((err: any) => console.error("Couldn't load page", err));
                         }}
                     >

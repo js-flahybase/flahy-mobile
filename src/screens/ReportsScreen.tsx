@@ -3,6 +3,7 @@ import { Wallet, X } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Linking, NativeModules, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { ScreenWrapper } from '../components/ScreenWrapper';
+import { API_BASE_URL } from '../config';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
 import { colors } from '../theme/colors';
@@ -82,7 +83,7 @@ export const ReportsScreen = ({ navigation }: ReportsScreenProps) => {
                     type: reportKind(file, fileName),
                     description: file.description || 'No description available for this file.',
                     uri: file.report_url,
-                    originalUri: `https://api.flahyhealth.com/api/report/download-report/${file.id || file.report_id}`
+                    originalUri: `${API_BASE_URL}/api/report/download-report/${file.id || file.report_id}`
                 };
             });
             // HTML first, then PDF. Stable sort keeps the original order inside each group.

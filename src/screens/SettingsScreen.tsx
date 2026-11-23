@@ -348,14 +348,14 @@ export const SettingsScreen = () => {
                         {/* Legal Links */}
                         <View style={{ marginTop: 24, gap: 12 }}>
                             <TouchableOpacity
-                                onPress={() => { setLegalModalTitle('Privacy Policy'); setLegalModalUrl('https://flahyhealth.com/privacy-policy-mobile'); }}
+                                onPress={() => { setLegalModalTitle('Privacy Policy'); setLegalModalUrl(`${WEB_APP_URL}/privacy-policy-mobile`); }}
                                 style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F9FAFB', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#F3F4F6' }}
                             >
                                 <Text style={{ fontSize: 15, fontWeight: '500', color: colors['text-primary'] }}>Privacy Policy</Text>
                                 <ChevronRight size={18} color={colors['text-secondary']} />
                             </TouchableOpacity>
                             <TouchableOpacity
-                                onPress={() => { setLegalModalTitle('Terms & Conditions'); setLegalModalUrl('https://flahyhealth.com/terms-condition'); }}
+                                onPress={() => { setLegalModalTitle('Terms & Conditions'); setLegalModalUrl(`${WEB_APP_URL}/terms-condition`); }}
                                 style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F9FAFB', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#F3F4F6' }}
                             >
                                 <Text style={{ fontSize: 15, fontWeight: '500', color: colors['text-primary'] }}>Terms & Conditions</Text>

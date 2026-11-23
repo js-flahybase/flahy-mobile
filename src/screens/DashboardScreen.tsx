@@ -33,6 +33,7 @@ import { CustomAlert } from '../components/CustomAlert';
 import { DataList } from '../components/DataList';
 import { ScreenWrapper } from '../components/ScreenWrapper';
 import { SupplementIntakeModal } from '../components/SupplementIntakeModal';
+import { API_BASE_URL } from '../config';
 import { RootStackParamList } from '../navigation/types';
 import { userService } from '../services/userService';
 import { useAuthStore } from '../store/authStore';
@@ -112,7 +113,7 @@ export const DashboardScreen = () => {
         uri: file.report_url || file.filePath,
         // Original file via download endpoint (same as web app)
         originalUri: file.id
-          ? `https://api.flahyhealth.com/api/report/download-report/${file.id}`
+          ? `${API_BASE_URL}/api/report/download-report/${file.id}`
           : file.report_url || file.filePath,
         type:
           file.extname ||
@@ -218,7 +219,7 @@ export const DashboardScreen = () => {
       const sourceUri = file.originalUri || file.uri;
       const fullUri = sourceUri?.startsWith('http')
         ? sourceUri
-        : `https://api.flahyhealth.com${
+        : `${API_BASE_URL}${
             sourceUri?.startsWith('/') ? '' : '/'
           }${sourceUri}`;
 

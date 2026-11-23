@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DatePicker from 'react-native-date-picker';
 import WebView from 'react-native-webview';
+import { WEB_APP_URL } from '../config';
 
 interface SignupData {
     firstName: string;
@@ -196,13 +197,13 @@ export const SignupForm: React.FC<SignupFormProps> = ({ onSubmit, onBack, isLoad
                     <Text className="text-text-primary font-medium ml-1 text-sm">Review before signing up:</Text>
                     <View className="flex-row gap-3">
                         <TouchableOpacity
-                            onPress={() => { setLegalModalTitle('Terms & Conditions'); setLegalModalUrl('https://flahyhealth.com/terms-condition'); }}
+                            onPress={() => { setLegalModalTitle('Terms & Conditions'); setLegalModalUrl(`${WEB_APP_URL}/terms-condition`); }}
                             className="flex-1 bg-white border border-gray-300 rounded-xl py-3 items-center"
                         >
                             <Text className="text-primary font-semibold text-sm">Terms & Conditions</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                            onPress={() => { setLegalModalTitle('Privacy Policy'); setLegalModalUrl('https://flahyhealth.com/privacy-policy-mobile'); }}
+                            onPress={() => { setLegalModalTitle('Privacy Policy'); setLegalModalUrl(`${WEB_APP_URL}/privacy-policy-mobile`); }}
                             className="flex-1 bg-white border border-gray-300 rounded-xl py-3 items-center"
                         >
                             <Text className="text-primary font-semibold text-sm">Privacy Policy</Text>
