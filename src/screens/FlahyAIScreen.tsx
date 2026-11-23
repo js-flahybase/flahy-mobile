@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { ArrowUp, FileText, Plus, Shield, X } from 'lucide-react-native';
+import { ArrowUp, Plus, Shield, X } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -39,11 +39,6 @@ type Message = {
   isStreaming?: boolean;
   attachment?: { uri: string; mediaType: string; fileName?: string };
 };
-
-const SUGGESTIONS = [
-  { id: '1', text: 'Explain my report', icon: FileText },
-  // { id: '2', text: "What's in my recent uploads?", icon: Zap },
-];
 
 // ---------------------------------------------------------------------------
 // Lightweight markdown renderer (zero dependencies, RN 0.83 / React 19 safe)
@@ -1058,46 +1053,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
     }
   };
 
-  const fetchLatestReport = async () => {
-    setIsLoading(true);
-
-    try {
-      const response = await api.get(
-        `${patientApiRoutes.reportList}?page=1&limit=1`,
-      );
-      const reports = response.data.data;
-
-      if (!reports || reports.length === 0) {
-        setGreetingMessage({
-          id: 'greeting',
-          role: 'assistant',
-          content: "I couldn't find any uploaded reports in your account.",
-        });
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(false);
-      sendMessage('Analyze my latest report');
-    } catch (error: any) {
-      console.error('Fetch Report Error:', error);
-      setGreetingMessage({
-        id: 'greeting',
-        role: 'assistant',
-        content: `Failed to fetch report: ${error.message || 'Unknown error'}`,
-      });
-      setIsLoading(false);
-    }
-  };
-
-  const handleSuggestionPress = (text: string) => {
-    if (text.includes('latest report')) {
-      fetchLatestReport();
-    } else {
-      sendMessage(text);
-    }
-  };
-
   // Show loading while checking consent
   if (hasAIConsent === null) {
     return (
@@ -1491,29 +1446,6 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
                 }
               }}
               keyboardShouldPersistTaps="handled"
-              ListFooterComponent={
-                storeMessages.length < 2 ? (
-                  <View className="mt-6">
-                    <Text className="mb-3 ml-1 text-sm font-medium text-text-secondary">
-                      Suggestions
-                    </Text>
-                    <View className="flex-row flex-wrap gap-2">
-                      {SUGGESTIONS.map(s => (
-                        <TouchableOpacity
-                          key={s.id}
-                          onPress={() => handleSuggestionPress(s.text)}
-                          className="flex-row gap-2 items-center px-4 py-2.5 bg-surface rounded-full"
-                        >
-                          <s.icon size={16} color={colors['text-primary']} />
-                          <Text className="text-[15px] text-text-primary">
-                            {s.text}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                ) : null
-              }
               renderItem={({ item }) => (
                 <View
                   className={`flex-row mb-4 ${
