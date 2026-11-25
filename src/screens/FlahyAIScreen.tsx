@@ -364,6 +364,10 @@ async function uploadFlahyAiFile(
   token: string | null,
   sessionId: string,
   file: { base64: string; mediaType: string; filename: string },
+  // 'account' = the user's own saved report preloaded silently; 'chat' = attached by the
+  // user in the chat. The backend uses this to choose between explaining the report and
+  // running the decision tree.
+  source: 'account' | 'chat' = 'chat',
 ): Promise<void> {
   const res = await ReactNativeBlobUtil.fetch(
     'POST',
@@ -374,6 +378,7 @@ async function uploadFlahyAiFile(
     },
     [
       { name: 'session_id', data: sessionId },
+      { name: 'source', data: source },
       {
         name: 'files',
         filename: file.filename,
@@ -392,6 +397,9 @@ async function sendFlahyAiChat(
   token: string | null,
   sessionId: string,
   message: string,
+  // The user has saved reports (known as soon as they are listed, even if their upload
+  // hasn't finished) - lets the backend pick the right mode and greeting.
+  hasAccountReport = false,
 ): Promise<string> {
   const res = await ReactNativeBlobUtil.fetch(
     'POST',
@@ -403,6 +411,7 @@ async function sendFlahyAiChat(
     [
       { name: 'session_id', data: sessionId },
       { name: 'message', data: message },
+      ...(hasAccountReport ? [{ name: 'has_account_report', data: '1' }] : []),
     ],
   );
   const data = JSON.parse(res.text());
@@ -482,6 +491,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
   // id, so (unlike the old /api/chat flow) nothing needs to be resent on
   // every turn.
   const sessionIdRef = useRef<string | null>(null);
+  const hasAccountReportRef = useRef(false);
   const ensureSession = async (): Promise<string> => {
     if (sessionIdRef.current) return sessionIdRef.current;
     sessionIdRef.current = await createFlahyAiSession();
@@ -565,6 +575,7 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         return;
       }
 
+      hasAccountReportRef.current = true;
       await ensureSession();
       let uploaded = 0;
       for (const reportMeta of reports.slice(0, MAX_PRELOADED_REPORTS)) {
@@ -609,28 +620,59 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
             try {
               const html = sample.length >= 2048 ? downloadResponse.text() : sample;
               const pdfBase64 = await convertHtmlToPdfBase64(html);
-              await uploadFlahyAiFile(token, sessionIdRef.current as string, {
-                base64: pdfBase64,
-                mediaType: 'application/pdf',
-                filename: `${fileName.replace(/\.(html?|htm)$/i, '')}.pdf`,
-              });
+              await uploadFlahyAiFile(
+                token,
+                sessionIdRef.current as string,
+                {
+                  base64: pdfBase64,
+                  mediaType: 'application/pdf',
+                  filename: `${fileName.replace(/\.(html?|htm)$/i, '')}.pdf`,
+                },
+                'account',
+              );
               uploaded++;
             } catch (err: any) {
-              // Matches the web client's fallback: if conversion fails, the
-              // report is skipped rather than uploaded as raw HTML.
+              // Same fallback as web: if PDF conversion fails, upload the raw
+              // HTML instead (the backend reads .html directly) so the report
+              // still reaches FlahyAI.
               console.error(
-                `HTML->PDF conversion failed for "${fileName}", skipping:`,
+                `HTML->PDF conversion failed for "${fileName}", uploading HTML instead:`,
                 err?.message,
               );
+              try {
+                await uploadFlahyAiFile(
+                  token,
+                  sessionIdRef.current as string,
+                  {
+                    base64: downloadResponse.base64(),
+                    mediaType: 'text/html',
+                    filename: fileName.match(/\.(html?|htm)$/i)
+                      ? fileName
+                      : `${fileName}.html`,
+                  },
+                  'account',
+                );
+                uploaded++;
+              } catch (htmlErr: any) {
+                console.error(
+                  `HTML upload failed for "${fileName}":`,
+                  htmlErr?.message,
+                );
+              }
             }
             continue;
           }
 
-          await uploadFlahyAiFile(token, sessionIdRef.current as string, {
-            base64: downloadResponse.base64(),
-            mediaType: effectiveCT,
-            filename: fileName,
-          });
+          await uploadFlahyAiFile(
+            token,
+            sessionIdRef.current as string,
+            {
+              base64: downloadResponse.base64(),
+              mediaType: effectiveCT,
+              filename: fileName,
+            },
+            'account',
+          );
           uploaded++;
         } catch (err: any) {
           console.error(`Failed to preload report "${fileName}":`, err?.message);
@@ -802,7 +844,12 @@ export const FlahyAIScreen = ({ navigation }: Props) => {
         });
       }
 
-      const replyText = await sendFlahyAiChat(token, sessionId, msgText);
+      const replyText = await sendFlahyAiChat(
+        token,
+        sessionId,
+        msgText,
+        hasAccountReportRef.current,
+      );
       storeUpdateMessage(aiMsgId, {
         content: replyText || 'No response received.',
       });
